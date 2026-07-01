@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Env / secrets
+.env
+*.env
+!.env.example
+
+# OS
+.DS_Store
+
+# Data — raw/interim/processed contents are never committed (real user data)
+data/raw/*
+data/interim/*
+data/processed/*
+data/metadata/*
+!data/**/.gitkeep
+
+# Models — trained artifacts are not committed
+models/candidate/*
+models/production/*
+!models/**/.gitkeep
+
+# Reports — generated artifacts
+reports/*
+!reports/.gitkeep
