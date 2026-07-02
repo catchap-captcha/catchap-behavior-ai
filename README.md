@@ -48,6 +48,9 @@ uvicorn app.main:app --reload
 ## 데이터가 쌓이기 전 (지금)
 
 ```bash
+# 규칙 기반 Bot 데이터 생성 (지금 만들 수 있는 유일한 데이터, 방어 연구용)
+python -m training.generate_rule_bots --count 600 --post http://<host>/api/v1/behavior/collect
+
 # DB 준비 상태만 확인 (모델 학습 안 함)
 python -m training.check_data_readiness
 python -m training.run_training_pipeline --check-only

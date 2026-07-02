@@ -43,6 +43,25 @@ python -m training.run_training_pipeline --check-only
 }
 ```
 
+## 1.5 규칙 기반 봇 생성 (Bot 데이터 부트스트랩)
+
+실제 사용자 없이도 **지금 만들 수 있는 유일한 데이터**가 규칙 기반 봇입니다. 봇
+데이터의 부트스트랩이자 baseline 모델의 "쉬운 시험"이며, GAN 봇(어려운 시험)보다
+먼저 필요합니다. (방어 연구용 — 우리 CAPTCHA 탐지 학습용이며 우회 도구가 아닙니다.)
+
+```bash
+# 파일로 생성 (기본): straight / accel / jitter 3종
+python -m training.generate_rule_bots --count 600 --out data/interim/rule_bots.jsonl
+
+# collect API로 바로 전송 → 품질검사·Feature 계산을 거쳐 DB 적재
+python -m training.generate_rule_bots --count 600 --post http://<host>/api/v1/behavior/collect
+```
+
+- 라벨: `label=bot, label_source=rule_bot, bot_family∈{straight,accel,jitter}`,
+  `generator_version=rule_v1`.
+- family 3종이라 readiness의 `MIN_BOT_FAMILIES=3` 기준을 채웁니다.
+- GAN 봇은 실제 Human 데이터가 쌓인 뒤의 후속 단계입니다(§9).
+
 ## 2. 학습에 쓰는 데이터
 
 `ai_training_dataset` 뷰 = `quality_status='valid'` + `label ∈ {human,bot}` +
