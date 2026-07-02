@@ -55,3 +55,32 @@ SELECT, INSERT, UPDATE  ON <database>.ai_*
 
 문의: 스키마 컬럼명은 애플리케이션이 이름으로 매핑하므로 **컬럼명 변경 시 반드시
 사전 협의**가 필요합니다.
+
+---
+
+## 학습(취약문제 추천) 스키마 — `db/schema_learning_mysql.sql` [초안]
+
+봇탐지(`ai_*`)와 **분리된** 학습 도메인 테이블입니다. 접두사 `learning_`.
+
+```bash
+mysql -h <host> -u <admin> -p <database> < db/schema_learning_mysql.sql
+```
+
+| 객체 | 용도 |
+|------|------|
+| `learning_students` | 학생 익명 정보 (age_group, consent_version) |
+| `learning_concepts` | 개념 정보 (+ 선행개념 임시 컬럼) |
+| `learning_questions` | 문제·난이도·선택지수·정답 |
+| `learning_question_concepts` | 문제-개념 M:N (다개념 대비) |
+| `learning_attempts` | 풀이 원본 (답 의미 + 조작 신호) |
+| `learning_concept_mastery` | 학생별 개념 숙련도 캐시 |
+| `learning_recommendations` | 추천 문제 + 이유 |
+| `learning_recommendation_results` | 추천 문제 푼 결과 (mastery 전/후) |
+
+⚠️ **CAPTCHA 연결**: `learning_attempts.captcha_attempt_id` 를
+`ai_behavior_attempts.attempt_id` 에 연결할 수 있게 남겨뒀습니다(같은 드래그가
+봇탐지+학습 양쪽에 쓰이므로). 타입/FK는 다른 팀 테이블 확정 후 연결 — **연결 전
+ai-service 팀과 협의** 바랍니다.
+
+⚠️ **채워지는 경로**: `learning_attempts` 의 답 의미 컬럼(grabbed_answer_id 등)은
+프론트/CAPTCHA 수집 payload 확장으로 들어옵니다(현재 봇탐지 payload엔 없음).
