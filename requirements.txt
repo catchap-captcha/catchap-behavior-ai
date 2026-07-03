@@ -20,6 +20,9 @@ matplotlib>=3.8,<4.0        # confusion matrix figures only
 # GAN stage only (imported lazily inside training/train_gan.py)
 torch>=2.2,<3.0
 
+# Chatbot (LLM) — imported lazily inside chat/engine.py
+anthropic>=0.40,<1.0
+
 # Tests
 pytest>=8.2,<9.0
 httpx>=0.27,<1.0            # FastAPI TestClient dependency
