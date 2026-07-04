@@ -17,6 +17,7 @@ from app.database.mysql_models import (
     AttemptFeatures,
     BehaviorAttempt,
     InteractionSummary,
+    LearningAttempt,
     ModelPrediction,
     PointerEvent,
     SecurityFeatures,
@@ -128,6 +129,13 @@ class AttemptRepository:
                 setattr(existing, name, value)
             existing.feature_schema_version = feature_schema_version
             existing.calculated_at = _utcnow()
+
+    def learning_exists(self, attempt_id: str) -> bool:
+        return self.session.get(LearningAttempt, attempt_id) is not None
+
+    def save_learning_attempt(self, fields: dict[str, Any]) -> None:
+        """Insert one learning_attempts row (answer-semantics + judgment)."""
+        self.session.add(LearningAttempt(created_at=_utcnow(), **fields))
 
     def save_security_features(self, attempt_id: str, feats: dict[str, Any]) -> None:
         existing = self.session.get(SecurityFeatures, attempt_id)

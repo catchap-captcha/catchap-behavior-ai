@@ -80,6 +80,49 @@ def test_predict_without_model_returns_503(client):
     assert resp.json()["reason"] == "model_not_ready"
 
 
+def test_collect_stores_learning_when_what_present(client):
+    headers = {"X-API-Key": "test-collect-key"}
+    payload = _collect_payload("att_learn_1")
+    # add the WHAT block: correct tile grabbed, dropped in slot -> correct
+    payload["final_drop_error"] = 1.0
+    payload["learning"] = {
+        "question_id": "q1",
+        "concept_id": "ADD_WITHIN_5",
+        "difficulty": 0.3,
+        "answer_options_count": 3,
+        "correct_answer_id": "5",
+        "grabbed_answer_id": "5",
+        "released_target_id": "slot",
+    }
+    resp = client.post("/api/v1/behavior/collect", json=payload, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["learning_stored"] is True
+
+    # the learning_attempts row was written with a computed judgment
+    from app.database.mysql_models import LearningAttempt
+    from app.database.connection import get_session  # overridden dependency
+
+    session_gen = client.app.dependency_overrides[get_session]()
+    session = next(session_gen)
+    try:
+        row = session.get(LearningAttempt, "att_learn_1")
+        assert row is not None
+        assert row.concept_id == "ADD_WITHIN_5"
+        assert row.outcome == "correct" and row.is_correct is True
+        assert row.valid_for_learning is True
+        assert row.captcha_attempt_id == "att_learn_1"  # linked to the bot record
+    finally:
+        session.close()
+
+
+def test_collect_without_learning_block_still_works(client):
+    headers = {"X-API-Key": "test-collect-key"}
+    payload = _collect_payload("att_botonly_1")  # no learning block
+    resp = client.post("/api/v1/behavior/collect", json=payload, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["learning_stored"] is False
+
+
 def test_health_reports_no_model(client):
     resp = client.get("/health")
     assert resp.status_code == 200

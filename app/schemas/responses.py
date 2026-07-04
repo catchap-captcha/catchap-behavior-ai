@@ -14,6 +14,7 @@ class CollectResponse(BaseModel):
     quality_status: str            # valid | pending | rejected
     rejection_reason: str | None = None
     feature_schema_version: str
+    learning_stored: bool = False  # True when the WHAT block was stored for recommendation
 
 
 class PredictResponse(BaseModel):

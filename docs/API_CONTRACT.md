@@ -60,6 +60,30 @@ ai-service는 웹 드래그 CAPTCHA의 **원본 포인터 이벤트**를 받습�
 - `position_correct` / `interaction_success` / `final_drop_error` 는 저장되지만
   **행동 모델 Feature로 쓰지 않습니다** (CAPTCHA 통과 판정용).
 
+### 취약문제 추천용 `learning` 블록 (선택)
+
+봇탐지는 위 포인터 이벤트(HOW)만으로 되지만, **취약문제 추천/진단**에는 아래
+`learning` 블록(WHAT)이 필요합니다. 있으면 collect가 학습 데이터도 함께 저장하고
+**조작실수 판정(정답/개념오답/조작실수)까지 계산**해 둡니다. 없으면 봇탐지만 저장.
+
+```json
+"learning": {
+  "question_id": "q_add_3plus2",
+  "concept_id": "ADD_WITHIN_5",
+  "difficulty": 0.3,
+  "answer_options_count": 3,
+  "correct_answer_id": "5",
+  "grabbed_answer_id": "5",       // 집은 타일 (= 의도한 답)
+  "released_target_id": "slot",   // 놓은 곳; null이면 드롭 실패
+  "answer_slot_id": "slot",
+  "game_type": "number_add"
+}
+```
+
+- `correct_answer_id` / `concept_id` / `difficulty` 는 **백엔드가 문제은행에서 조회**해
+  넣습니다 (프론트 값 신뢰 금지 — 치팅 방지).
+- 응답의 `learning_stored: true` 로 저장 여부 확인.
+
 ### 응답 `200`
 
 ```json

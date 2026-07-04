@@ -71,6 +71,27 @@ class CollectionContext(BaseModel):
     consent_version: str | None = None
 
 
+class LearningContext(BaseModel):
+    """Answer-semantics for the weak-problem recommendation (the 'WHAT').
+
+    Supplied by the trusted CAPTCHA/learning backend (which looks up the correct
+    answer, concept and difficulty from the question bank — never trusts the
+    frontend for these). Bot detection needs only the pointer events (HOW);
+    recommendation needs this block (WHAT). Optional, so bot-only collection
+    still works without it.
+    """
+
+    question_id: str = Field(min_length=1, max_length=64)
+    concept_id: str = Field(min_length=1, max_length=64)
+    difficulty: float = Field(ge=0.0, le=1.0)
+    answer_options_count: int = Field(ge=0)          # 0/1 => open-ended (no guessing)
+    correct_answer_id: str
+    answer_slot_id: str = "slot"                     # id of the valid answer drop area
+    grabbed_answer_id: str | None = None             # tile the student picked up (= intended answer)
+    released_target_id: str | None = None            # where dropped; None => drop failed
+    game_type: str | None = None
+
+
 class _AttemptBase(BaseModel):
     schema_version: str
     attempt_id: str = Field(min_length=1, max_length=64)
@@ -102,6 +123,8 @@ class CollectRequest(_AttemptBase):
     position_correct: bool | None = None
     interaction_success: bool | None = None
     final_drop_error: float | None = None
+    # answer-semantics for weak-problem recommendation; None => bot-only collection
+    learning: LearningContext | None = None
 
 
 class PredictRequest(_AttemptBase):

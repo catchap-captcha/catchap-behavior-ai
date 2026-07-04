@@ -159,3 +159,47 @@ class ModelPrediction(Base):
     model_version: Mapped[str] = mapped_column(String(64))
     feature_schema_version: Mapped[str] = mapped_column(String(16))
     predicted_at: Mapped[datetime] = mapped_column(DateTime)
+
+
+class LearningAttempt(Base):
+    """Maps ``learning_attempts`` (see db/schema_learning_mysql.sql).
+
+    FK columns are plain strings here (no ORM ForeignKey) — the real FKs live in
+    the DDL; the app only reads/writes. Stores the answer-semantics (WHAT) plus
+    the operation-error judgment computed at collect time.
+    """
+
+    __tablename__ = "learning_attempts"
+
+    attempt_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    student_id: Mapped[str] = mapped_column(String(64), index=True)
+    question_id: Mapped[str] = mapped_column(String(64), index=True)
+    concept_id: Mapped[str] = mapped_column(String(64), index=True)
+    difficulty: Mapped[float] = mapped_column(Float)
+    answer_options_count: Mapped[int] = mapped_column(Integer)
+    correct_answer_id: Mapped[str] = mapped_column(String(64))
+
+    grabbed_answer_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    released_target_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    answer_slot_id: Mapped[str] = mapped_column(String(64), default="slot")
+
+    pointercancel_count: Mapped[int] = mapped_column(Integer, default=0)
+    regrab_count: Mapped[int] = mapped_column(Integer, default=0)
+    failed_drop_count: Mapped[int] = mapped_column(Integer, default=0)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    final_drop_error_px: Mapped[float | None] = mapped_column(Float, nullable=True)
+    response_time_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    system_error: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    presentation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # operation-error judgment (computed from learning.operation_error)
+    outcome: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    valid_for_learning: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    is_correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    captcha_attempt_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    answered_at: Mapped[datetime] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime)
