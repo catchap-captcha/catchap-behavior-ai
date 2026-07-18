@@ -1,6 +1,6 @@
-"""Train the three candidate models: RandomForest, XGBoost, LightGBM.
+"""Train the candidate tree models: RandomForest, ExtraTrees, XGBoost, LightGBM.
 
-All three train on the SAME 29 features and the SAME train split, with a fixed
+All models train on the SAME 29 features and the SAME train split, with a fixed
 seed and class-imbalance handling. Hyperparameters are kept conservative and
 reproducible; validation is used downstream to pick the decision threshold
 (the primary tunable) — see :mod:`training.evaluate_models`.
@@ -17,7 +17,7 @@ import pandas as pd
 
 from training.split_dataset import SplitData
 
-MODEL_NAMES = ["random_forest", "xgboost", "lightgbm"]
+MODEL_NAMES = ["random_forest", "extra_trees", "xgboost", "lightgbm"]
 
 
 def _scale_pos_weight(y: pd.Series) -> float:
@@ -28,13 +28,20 @@ def _scale_pos_weight(y: pd.Series) -> float:
 
 
 def build_models(y_train: pd.Series, seed: int = 42) -> dict[str, Any]:
-    """Construct the three unfitted estimators with imbalance handling."""
+    """Construct the unfitted estimators with imbalance handling."""
     from lightgbm import LGBMClassifier
-    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.ensemble import ExtraTreesClassifier, RandomForestClassifier
     from xgboost import XGBClassifier
 
     return {
         "random_forest": RandomForestClassifier(
+            n_estimators=300,
+            max_depth=None,
+            class_weight="balanced",
+            n_jobs=-1,
+            random_state=seed,
+        ),
+        "extra_trees": ExtraTreesClassifier(
             n_estimators=300,
             max_depth=None,
             class_weight="balanced",
@@ -68,7 +75,7 @@ def build_models(y_train: pd.Series, seed: int = 42) -> dict[str, Any]:
 
 
 def train_all(split: SplitData, seed: int = 42) -> dict[str, Any]:
-    """Fit all three models on the train split. Returns name -> fitted model."""
+    """Fit all candidate models on the train split. Returns name -> model."""
     models = build_models(split.y_train, seed=seed)
     fitted: dict[str, Any] = {}
     for name, model in models.items():

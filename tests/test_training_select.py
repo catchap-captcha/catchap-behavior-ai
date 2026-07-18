@@ -84,7 +84,12 @@ def test_full_train_evaluate_select_smoke(training_rows):
     ds = build_dataset(training_rows)
     split = split_dataset(ds, seed=42)
     models = train_all(split, seed=42)
-    assert set(models) == {"random_forest", "xgboost", "lightgbm"}
+    assert set(models) == {
+        "random_forest",
+        "extra_trees",
+        "xgboost",
+        "lightgbm",
+    }
 
     evals = []
     for name, model in models.items():

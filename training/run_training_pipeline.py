@@ -8,12 +8,12 @@ Order:
   3. if not ready -> write report and STOP (no training, no model overwrite)
   4. load valid data, build dataset
   5. grouped split (train/val/test)
-  6-8. train RandomForest / XGBoost / LightGBM
-  9. choose threshold on validation
-  10. evaluate once on test
-  11. select best model
-  12. save candidate bundles + reports
-  13. promote to production ONLY if a model satisfies the selection criteria
+  6. train RandomForest / ExtraTrees / XGBoost / LightGBM
+  7. choose threshold on validation
+  8. evaluate once on test
+  9. select best model
+  10. save candidate bundles + reports
+  11. promote to production ONLY if a model satisfies the selection criteria
 
 Any error during training leaves the existing production model untouched, because
 promotion is the very last step and only touches models/production/.
@@ -114,10 +114,10 @@ def run_pipeline(args: argparse.Namespace) -> int:
     split = split_dataset(ds, seed=args.seed)
     _save_split_manifest(split.manifest, args.dataset_version)
 
-    # 6-8) train three models
+    # 6) train candidate models
     models = train_all(split, seed=args.seed)
 
-    # 9-10) threshold on validation, evaluate once on test
+    # 7-8) threshold on validation, evaluate once on test
     evaluations = []
     thresholds: dict[str, float] = {}
     val_metrics: dict[str, Any] = {}
@@ -127,16 +127,16 @@ def run_pipeline(args: argparse.Namespace) -> int:
         val_metrics[name] = evaluate(model, name, split.X_val, split.y_val, t, "validation")
         evaluations.append(evaluate(model, name, split.X_test, split.y_test, t, "test"))
 
-    # 11) select
+    # 9) select
     selection = select_best(evaluations)
 
-    # 12) persist candidates + reports
+    # 10) persist candidates + reports
     dataset_version = args.dataset_version or f"auto_{len(ds)}rows"
     _write_reports(evaluations)
     _save_candidates(models, evaluations, thresholds, val_metrics, dataset_version)
     _write_summary(report, evaluations, selection, dataset_version)
 
-    # 13) promote only if a model was selected
+    # 11) promote only if a model was selected
     if selection.selected is None:
         print("경고: 선택 기준을 만족하는 모델이 없습니다. production 모델을 교체하지 않습니다.")
         print(f"  사유: {selection.warning}")
