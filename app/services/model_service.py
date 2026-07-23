@@ -21,14 +21,13 @@ from app.config import get_settings
 from app.services.feature_extractor import FEATURE_NAMES
 
 # Keys expected in a model bundle (written by the training pipeline).
-BUNDLE_REQUIRED_KEYS = {
-    "model",
+BUNDLE_COMMON_KEYS = {
     "model_name",
     "model_version",
-    "feature_names",
     "feature_schema_version",
     "threshold",
 }
+TWO_VIEW_MIN_FUSION = "min(P_human_general_without_physics, P_human_dynamics_physics)"
 
 
 class ModelService:
@@ -50,8 +49,7 @@ class ModelService:
                 self._bundle = None
                 return False
             bundle = joblib.load(path)
-            missing = BUNDLE_REQUIRED_KEYS - set(bundle)
-            if missing:
+            if not self._is_supported_bundle(bundle):
                 # A malformed bundle must not be served.
                 self._bundle = None
                 return False
@@ -62,6 +60,24 @@ class ModelService:
     def _find_bundle(directory: str) -> str | None:
         files = sorted(glob.glob(os.path.join(directory, "*.joblib")))
         return files[-1] if files else None
+
+    @staticmethod
+    def _is_supported_bundle(bundle: Any) -> bool:
+        if not isinstance(bundle, dict) or BUNDLE_COMMON_KEYS - set(bundle):
+            return False
+        if "model" in bundle and "feature_names" in bundle:
+            return True
+        if bundle.get("score_fusion") != TWO_VIEW_MIN_FUSION:
+            return False
+        models = bundle.get("models")
+        feature_views = bundle.get("feature_views")
+        return (
+            isinstance(models, dict)
+            and isinstance(feature_views, dict)
+            and bool(models)
+            and set(models) == set(feature_views)
+            and all(feature_views[name] for name in models)
+        )
 
     # --- introspection ---
     def is_ready(self) -> bool:
@@ -75,6 +91,18 @@ class ModelService:
     def model_version(self) -> str | None:
         return self._bundle["model_version"] if self._bundle else None
 
+    @property
+    def feature_schema_version(self) -> str:
+        if self._bundle:
+            return str(self._bundle["feature_schema_version"])
+        return get_settings().feature_schema_version
+
+    @property
+    def feature_input_scope(self) -> str:
+        if self._bundle:
+            return str(self._bundle.get("feature_input_scope", "all_behavioral_features"))
+        return "all_behavioral_features"
+
     # --- scoring ---
     def score(self, features: dict[str, float]) -> dict[str, Any]:
         """Score one feature vector.
@@ -87,9 +115,17 @@ class ModelService:
         if bundle is None:
             raise RuntimeError("model_not_ready")
 
-        order = bundle["feature_names"]
-        vector = np.array([[float(features.get(name, 0.0)) for name in order]], dtype=float)
-        human_score = self._positive_proba(bundle["model"], vector)
+        if "model" in bundle:
+            order = bundle["feature_names"]
+            vector = np.array([[float(features.get(name, 0.0)) for name in order]], dtype=float)
+            human_score = self._positive_proba(bundle["model"], vector)
+        else:
+            view_scores = []
+            for view_name, model in bundle["models"].items():
+                order = bundle["feature_views"][view_name]
+                vector = np.array([[float(features.get(name, 0.0)) for name in order]], dtype=float)
+                view_scores.append(self._positive_proba(model, vector))
+            human_score = min(view_scores)
 
         threshold = float(bundle["threshold"])
         prediction = "human" if human_score >= threshold else "bot"
@@ -99,6 +135,11 @@ class ModelService:
             "bot_decision": "low_risk" if prediction == "human" else "high_risk",
             "prediction": prediction,
             "threshold": threshold,
+            "step_up_threshold": (
+                float(bundle["step_up_threshold"])
+                if bundle.get("step_up_threshold") is not None
+                else None
+            ),
             "model_name": bundle["model_name"],
             "model_version": bundle["model_version"],
             "feature_schema_version": bundle["feature_schema_version"],
@@ -122,9 +163,7 @@ model_service = ModelService()
 
 def feature_schema_version() -> str:
     """Current feature schema version (from the loaded bundle or config)."""
-    if model_service.is_ready():
-        return model_service._bundle["feature_schema_version"]  # type: ignore[index]
-    return get_settings().feature_schema_version
+    return model_service.feature_schema_version
 
 
 # Re-exported so callers can validate against the canonical list.

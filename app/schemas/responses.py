@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel
@@ -19,10 +20,18 @@ class CollectResponse(BaseModel):
 
 class PredictResponse(BaseModel):
     attempt_id: str
-    prediction: Literal["human", "bot"]
+    # Policy score, not a calibrated probability that the caller may use for
+    # direct blocking. The CAPTCHA backend owns the final enforcement decision.
+    risk_score: float
+    risk_level: Literal["low", "medium", "high"]
+    recommended_action: Literal["allow", "step_up", "step_up_and_rate_limit"]
+    policy_mode: Literal["shadow", "active"]
+    reasons: list[str]
     human_score: float
     bot_risk_score: float
-    bot_decision: str              # low_risk | high_risk
+    path_similarity_score: float
+    exact_replay_detected: bool
+    attempts_per_minute: float
     threshold: float
     model_name: str
     model_version: str
@@ -46,6 +55,7 @@ class HealthResponse(BaseModel):
     model_name: str | None = None
     model_version: str | None = None
     feature_schema_version: str
+    policy_mode: Literal["shadow", "active"]
 
 
 class ReloadResponse(BaseModel):
@@ -53,3 +63,41 @@ class ReloadResponse(BaseModel):
     model_loaded: bool
     model_name: str | None = None
     model_version: str | None = None
+
+
+class ChallengeIssueResponse(BaseModel):
+    challenge_id: str
+    nonce: str
+    expires_at: datetime
+
+
+class ChallengeConsumeResponse(BaseModel):
+    challenge_id: str
+    consumed: bool
+    verdict: Literal["passed", "failed"] | None = None
+
+
+class ShadowOutcomeResponse(BaseModel):
+    attempt_id: str
+    stored: bool
+    idempotent: bool
+    policy_mode: Literal["shadow"]
+    would_have_action: Literal["allow", "step_up", "step_up_and_rate_limit"]
+    risk_level: Literal["low", "medium", "high"]
+    model_version: str
+
+
+class ShadowActionSummary(BaseModel):
+    would_have_action: Literal["allow", "step_up", "step_up_and_rate_limit"]
+    attempts: int
+    main_passed: int
+    main_failed: int
+    main_pass_rate: float
+
+
+class ShadowSummaryResponse(BaseModel):
+    policy_mode: Literal["shadow", "active"]
+    total_outcomes: int
+    would_step_up_count: int
+    would_step_up_rate: float
+    actions: list[ShadowActionSummary]

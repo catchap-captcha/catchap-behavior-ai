@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api import admin, collect, health, predict
+from app.api import admin, challenge, collect, health, predict, shadow
 from app.services.model_service import model_service
 
 
@@ -35,6 +35,8 @@ app = FastAPI(
 app.include_router(health.router)
 app.include_router(collect.router)
 app.include_router(predict.router)
+app.include_router(shadow.router)
+app.include_router(challenge.router)
 app.include_router(admin.router)
 
 

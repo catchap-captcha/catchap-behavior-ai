@@ -9,7 +9,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 
 from app.config import get_settings
-from app.schemas.responses import ReloadResponse
+from app.database.connection import get_session
+from app.database.repositories import ShadowOutcomeRepository
+from app.schemas.responses import ReloadResponse, ShadowSummaryResponse
+from sqlalchemy.orm import Session
 from app.services.model_service import model_service
 
 router = APIRouter(tags=["admin"])
@@ -36,3 +39,14 @@ def reload_model() -> ReloadResponse:
         model_name=model_service.model_name,
         model_version=model_service.model_version,
     )
+
+
+@router.get(
+    "/api/v1/admin/shadow/summary",
+    response_model=ShadowSummaryResponse,
+    dependencies=[Depends(require_admin_key)],
+)
+def shadow_summary(session: Session = Depends(get_session)) -> ShadowSummaryResponse:
+    """Return aggregate shadow observations; raw answer data is never returned."""
+    summary = ShadowOutcomeRepository(session).summary()
+    return ShadowSummaryResponse(policy_mode=get_settings().risk_policy_mode, **summary)

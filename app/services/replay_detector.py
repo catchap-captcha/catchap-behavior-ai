@@ -202,6 +202,16 @@ def _to_path(events: Sequence[dict[str, Any]]) -> np.ndarray:
     return np.asarray(rows, float) if rows else np.zeros((0, 2), float)
 
 
+def trace_fingerprint_from_events(events: Sequence[dict[str, Any]]) -> str | None:
+    """Return an exact-path fingerprint without exposing source identifiers."""
+    return trace_fingerprint(_to_path(events))
+
+
+def path_from_events(events: Sequence[dict[str, Any]]) -> np.ndarray:
+    """Return the normalized-coordinate path used by replay comparators."""
+    return _to_path(events)
+
+
 def compute_replay_features(
     events: Sequence[dict[str, Any]],
     *,
@@ -272,5 +282,7 @@ __all__ = [
     "PathComparator",
     "ReplayFeatures",
     "compute_replay_features",
+    "path_from_events",
     "trace_fingerprint",
+    "trace_fingerprint_from_events",
 ]

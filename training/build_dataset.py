@@ -73,7 +73,12 @@ def group_key(row: pd.Series) -> str:
     return f"attempt::{row.get('attempt_id')}"
 
 
-def build_dataset(rows: Iterable[dict[str, Any]]) -> Dataset:
+def build_dataset(
+    rows: Iterable[dict[str, Any]],
+    *,
+    feature_names: Iterable[str] = FEATURE_NAMES,
+    expected_schema_version: str = FEATURE_SCHEMA_VERSION,
+) -> Dataset:
     """Build a :class:`Dataset` from training-view rows.
 
     Raises:
@@ -91,20 +96,22 @@ def build_dataset(rows: Iterable[dict[str, Any]]) -> Dataset:
     if bad:
         raise ValueError(f"unexpected labels present: {sorted(bad)}")
 
+    feature_names = list(feature_names)
+
     # feature schema consistency
     if "feature_schema_version" in df:
         versions = set(df["feature_schema_version"].dropna().unique())
-        if versions and versions != {FEATURE_SCHEMA_VERSION}:
+        if versions and versions != {expected_schema_version}:
             raise ValueError(
                 f"feature_schema_version mismatch: found {sorted(versions)}, "
-                f"expected {FEATURE_SCHEMA_VERSION}"
+                f"expected {expected_schema_version}"
             )
 
-    missing = [c for c in FEATURE_NAMES if c not in df.columns]
+    missing = [c for c in feature_names if c not in df.columns]
     if missing:
         raise ValueError(f"dataset is missing feature columns: {missing}")
 
-    X = df[FEATURE_NAMES].astype(float).copy()
+    X = df[feature_names].astype(float).copy()
     if X.isnull().to_numpy().any():
         raise ValueError("feature matrix contains NULL/NaN values")
 

@@ -129,3 +129,45 @@ class CollectRequest(_AttemptBase):
 
 class PredictRequest(_AttemptBase):
     """Production inference payload. Deliberately has NO label fields."""
+
+
+class ShadowOutcomeRequest(BaseModel):
+    """Final CAPTCHA result recorded by the trusted backend during shadow mode.
+
+    The AI does not receive an answer or any answer text. Shadow mode must not
+    change the user's main CAPTCHA result, so the two verdicts must agree.
+    """
+
+    attempt_id: str = Field(min_length=1, max_length=64)
+    main_captcha_verdict: Literal["passed", "failed"]
+    final_verdict: Literal["passed", "failed"]
+
+    @field_validator("final_verdict")
+    @classmethod
+    def _shadow_preserves_main_verdict(cls, value: str, info) -> str:
+        main_verdict = info.data.get("main_captcha_verdict")
+        if main_verdict is not None and value != main_verdict:
+            raise ValueError("shadow mode must preserve the main CAPTCHA verdict")
+        return value
+
+
+class ChallengeIssueRequest(BaseModel):
+    """Trusted CAPTCHA-backend request to create a one-time challenge."""
+
+    session_id: str = Field(min_length=1, max_length=64)
+    site_key: str = Field(min_length=1, max_length=128)
+    purpose: str = Field(min_length=1, max_length=64)
+    problem_binding: str = Field(min_length=1, max_length=512)
+    ttl_seconds: int | None = Field(default=None, ge=30, le=600)
+
+
+class ChallengeConsumeRequest(BaseModel):
+    """Trusted CAPTCHA-backend request to consume one issued challenge."""
+
+    challenge_id: str = Field(min_length=1, max_length=64)
+    nonce: str = Field(min_length=32, max_length=128)
+    session_id: str = Field(min_length=1, max_length=64)
+    site_key: str = Field(min_length=1, max_length=128)
+    purpose: str = Field(min_length=1, max_length=64)
+    problem_binding: str = Field(min_length=1, max_length=512)
+    verdict: Literal["passed", "failed"]

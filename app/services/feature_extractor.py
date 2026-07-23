@@ -80,6 +80,13 @@ FEATURE_NAMES: list[str] = (
 )
 assert len(FEATURE_NAMES) == 29, "the behavioral vector must contain exactly 29 features"
 
+# These features are derivable from a single ordered pointer trace ``(x, y, t)``.
+# Interaction summary counters deliberately stay out of the trajectory-only model.
+TRAJECTORY_ONLY_FEATURE_NAMES: list[str] = (
+    BASIC_FEATURES + INTERVAL_FEATURES + CORRECTION_FEATURES
+)
+assert len(TRAJECTORY_ONLY_FEATURE_NAMES) == 24
+
 # Columns that must never enter a model as an input feature. Used by the
 # training pipeline to strip identifiers, provenance, labels and pass/fail
 # signals from the dataset.
@@ -100,6 +107,10 @@ MODEL_INPUT_EXCLUDE_COLUMNS = [
     "human_score",
     "bot_risk_score",
     "bot_decision",
+    "risk_score",
+    "risk_level",
+    "recommended_action",
+    "risk_reasons",
     "model_version",
 ]
 

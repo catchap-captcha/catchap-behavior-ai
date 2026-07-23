@@ -14,6 +14,27 @@
 
 SET NAMES utf8mb4;
 
+-- 0) One-time CAPTCHA challenge state -----------------------------------------
+-- Nonce and problem binding are SHA-256 digests. The browser never calls the
+-- issue/consume API directly; only the CAPTCHA backend holds its API key.
+CREATE TABLE IF NOT EXISTS ai_captcha_challenges (
+    challenge_id          VARCHAR(64)  NOT NULL,
+    nonce_hash            CHAR(64)     NOT NULL,
+    session_id            VARCHAR(64)  NOT NULL,
+    site_key              VARCHAR(128) NOT NULL,
+    purpose               VARCHAR(64)  NOT NULL,
+    problem_binding_hash  CHAR(64)     NOT NULL,
+    status                VARCHAR(16)  NOT NULL DEFAULT 'issued', -- issued|consumed
+    expires_at            DATETIME     NOT NULL,
+    consumed_at           DATETIME     NULL,
+    verdict               VARCHAR(16)  NULL, -- passed|failed
+    created_at            DATETIME     NOT NULL,
+
+    PRIMARY KEY (challenge_id),
+    KEY idx_challenges_session (session_id),
+    KEY idx_challenges_status_expiry (status, expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- 1) Attempt-level record ------------------------------------------------------
 CREATE TABLE IF NOT EXISTS ai_behavior_attempts (
     attempt_id                VARCHAR(64)  NOT NULL,
@@ -160,6 +181,11 @@ CREATE TABLE IF NOT EXISTS ai_model_predictions (
     human_score             DOUBLE      NOT NULL,
     bot_risk_score          DOUBLE      NOT NULL,
     bot_decision            VARCHAR(16) NOT NULL,
+    risk_score              DOUBLE      NOT NULL, -- advisory policy score, not P(bot)
+    risk_level              VARCHAR(16) NOT NULL, -- low | medium | high
+    recommended_action      VARCHAR(32) NOT NULL, -- allow | step_up | step_up_and_rate_limit
+    policy_mode             VARCHAR(16) NOT NULL DEFAULT 'shadow', -- shadow | active
+    risk_reasons            JSON        NOT NULL,
     threshold               DOUBLE      NOT NULL,
     model_name              VARCHAR(64) NOT NULL,
     model_version           VARCHAR(64) NOT NULL,
@@ -168,11 +194,28 @@ CREATE TABLE IF NOT EXISTS ai_model_predictions (
 
     PRIMARY KEY (prediction_id),
     KEY idx_pred_attempt (attempt_id),
+    KEY idx_pred_policy_mode (policy_mode),
     CONSTRAINT fk_pred_attempt FOREIGN KEY (attempt_id)
         REFERENCES ai_behavior_attempts (attempt_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- 7) Training dataset view -----------------------------------------------------
+-- 7) Shadow-mode observed outcomes ---------------------------------------------
+CREATE TABLE IF NOT EXISTS ai_shadow_outcomes (
+    attempt_id               VARCHAR(64) NOT NULL,
+    main_captcha_verdict     VARCHAR(16) NOT NULL, -- passed | failed
+    final_verdict            VARCHAR(16) NOT NULL, -- equals main verdict in shadow mode
+    would_have_action        VARCHAR(32) NOT NULL, -- copied from ai_model_predictions
+    risk_level               VARCHAR(16) NOT NULL,
+    model_version            VARCHAR(64) NOT NULL,
+    recorded_at              DATETIME    NOT NULL,
+
+    PRIMARY KEY (attempt_id),
+    KEY idx_shadow_action (would_have_action),
+    CONSTRAINT fk_shadow_attempt FOREIGN KEY (attempt_id)
+        REFERENCES ai_behavior_attempts (attempt_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 8) Training dataset view -----------------------------------------------------
 -- Only quality_status='valid', label in ('human','bot'), label_source present.
 -- Joins the 29 features and split-relevant metadata for the training pipeline.
 CREATE OR REPLACE VIEW ai_training_dataset AS

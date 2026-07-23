@@ -66,7 +66,13 @@ class ReadinessReport:
     missing: list[str] = field(default_factory=list)
 
 
-def compute_readiness(rows: list[dict[str, Any]], thr: Thresholds) -> ReadinessReport:
+def compute_readiness(
+    rows: list[dict[str, Any]],
+    thr: Thresholds,
+    *,
+    feature_names=FEATURE_NAMES,
+    expected_schema_version: str = FEATURE_SCHEMA_VERSION,
+) -> ReadinessReport:
     """Assess readiness from training-view rows."""
     human = [r for r in rows if r.get("label") == "human"]
     bot = [r for r in rows if r.get("label") == "bot"]
@@ -77,9 +83,9 @@ def compute_readiness(rows: list[dict[str, Any]], thr: Thresholds) -> ReadinessR
 
     schema_mismatch = sum(
         1 for r in rows
-        if r.get("feature_schema_version") not in (None, FEATURE_SCHEMA_VERSION)
+        if r.get("feature_schema_version") not in (None, expected_schema_version)
     )
-    null_nonfinite = _count_bad_features(rows)
+    null_nonfinite = _count_bad_features(rows, feature_names)
 
     imbalance = None
     if human and bot:
@@ -122,10 +128,10 @@ def compute_readiness(rows: list[dict[str, Any]], thr: Thresholds) -> ReadinessR
     )
 
 
-def _count_bad_features(rows: list[dict[str, Any]]) -> int:
+def _count_bad_features(rows: list[dict[str, Any]], feature_names=FEATURE_NAMES) -> int:
     bad = 0
     for r in rows:
-        for name in FEATURE_NAMES:
+        for name in feature_names:
             if name not in r:
                 continue
             v = r[name]

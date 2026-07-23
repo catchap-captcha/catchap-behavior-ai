@@ -11,6 +11,7 @@ from app.services.replay_detector import (
     NormalizedPathComparator,
     compute_replay_features,
     trace_fingerprint,
+    trace_fingerprint_from_events,
 )
 
 
@@ -33,6 +34,16 @@ def test_trace_fingerprint_ignores_translation_but_not_scale():
 
     assert trace_fingerprint(path) == trace_fingerprint(translated)
     assert trace_fingerprint(path) != trace_fingerprint(scaled)
+
+
+def test_event_fingerprint_uses_normalized_coordinates():
+    events = [
+        {"seq": 0, "x": 10, "y": 20, "x_normalized": 0.1, "y_normalized": 0.2},
+        {"seq": 1, "x": 20, "y": 30, "x_normalized": 0.2, "y_normalized": 0.3},
+    ]
+    expected = trace_fingerprint(np.asarray([[0.1, 0.2], [0.2, 0.3]]))
+
+    assert trace_fingerprint_from_events(events) == expected
 
 
 def test_dtw_handles_resampling_translation_and_uniform_scale():

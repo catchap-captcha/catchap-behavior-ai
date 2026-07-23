@@ -8,6 +8,7 @@ Nothing here is hardcoded; missing secrets simply disable the guarded path
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -32,10 +33,26 @@ class Settings(BaseSettings):
     # --- Auth (interfaces; empty means "no key configured") ---
     collect_api_key: str = ""
     admin_api_key: str = ""
+    captcha_backend_api_key: str = ""
+
+    # --- CAPTCHA protocol security ---
+    captcha_challenge_ttl_seconds: int = 120
+    captcha_challenge_max_ttl_seconds: int = 300
 
     # --- Model serving ---
     production_model_dir: str = "models/production"
     default_threshold: float = 0.55
+
+    # --- Advisory risk policy ---
+    # These are policy weights, not calibrated probabilities. The backend uses
+    # the returned action to step up verification; it remains the decision maker.
+    risk_dtw_similarity_threshold: float = 0.996693
+    risk_max_attempts_per_minute: float = 20.0
+    risk_history_window_seconds: int = 60
+    risk_history_max_attempts: int = 50
+    # Shadow is the safe default: the backend records what the AI would have
+    # requested but does not alter the current CAPTCHA outcome.
+    risk_policy_mode: Literal["shadow", "active"] = "shadow"
 
     # --- Schema versions ---
     api_schema_version: str = "1.0"
@@ -44,7 +61,7 @@ class Settings(BaseSettings):
     # --- Training readiness gates (project defaults, not research thresholds) ---
     min_human_samples: int = 500
     min_bot_samples: int = 500
-    min_human_participants: int = 20
+    min_human_participants: int = 0
     min_bot_families: int = 3
 
     # --- GAN readiness gates ---

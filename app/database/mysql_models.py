@@ -19,6 +19,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    JSON,
     String,
     UniqueConstraint,
 )
@@ -29,6 +30,29 @@ from app.services.feature_extractor import FEATURE_NAMES
 
 class Base(DeclarativeBase):
     pass
+
+
+class CaptchaChallenge(Base):
+    """Server-side, single-use CAPTCHA challenge state.
+
+    The nonce and problem binding are stored only as SHA-256 digests.  This
+    table is deliberately independent of behavior attempts because a challenge
+    must be consumed even when a user submits no pointer trace or fails it.
+    """
+
+    __tablename__ = "ai_captcha_challenges"
+
+    challenge_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    nonce_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    site_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(64), nullable=False)
+    problem_binding_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="issued", index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    verdict: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
 class BehaviorAttempt(Base):
@@ -154,11 +178,36 @@ class ModelPrediction(Base):
     human_score: Mapped[float] = mapped_column(Float)
     bot_risk_score: Mapped[float] = mapped_column(Float)
     bot_decision: Mapped[str] = mapped_column(String(16))
+    risk_score: Mapped[float] = mapped_column(Float)
+    risk_level: Mapped[str] = mapped_column(String(16))
+    recommended_action: Mapped[str] = mapped_column(String(32))
+    policy_mode: Mapped[str] = mapped_column(String(16), default="shadow", index=True)
+    risk_reasons: Mapped[list[str]] = mapped_column(JSON, default=list)
     threshold: Mapped[float] = mapped_column(Float)
     model_name: Mapped[str] = mapped_column(String(64))
     model_version: Mapped[str] = mapped_column(String(64))
     feature_schema_version: Mapped[str] = mapped_column(String(16))
     predicted_at: Mapped[datetime] = mapped_column(DateTime)
+
+
+class ShadowOutcome(Base):
+    """Observed final result for a prediction while enforcement is shadowed.
+
+    No answer text, question content, or client-controlled risk action is
+    stored here. The would-have action is copied from the saved AI prediction.
+    """
+
+    __tablename__ = "ai_shadow_outcomes"
+
+    attempt_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("ai_behavior_attempts.attempt_id"), primary_key=True
+    )
+    main_captcha_verdict: Mapped[str] = mapped_column(String(16))
+    final_verdict: Mapped[str] = mapped_column(String(16))
+    would_have_action: Mapped[str] = mapped_column(String(32), index=True)
+    risk_level: Mapped[str] = mapped_column(String(16))
+    model_version: Mapped[str] = mapped_column(String(64))
+    recorded_at: Mapped[datetime] = mapped_column(DateTime)
 
 
 class LearningAttempt(Base):
