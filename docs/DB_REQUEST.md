@@ -21,7 +21,39 @@ mysql -h <host> -u <admin> -p <database> < db/schema_mysql.sql
 | `ai_attempt_features` | table | 행동 Feature 29개 |
 | `ai_security_features` | table | replay/세션 위험 신호 |
 | `ai_model_predictions` | table | 추론 결과 로그 |
+| `ai_shadow_outcomes` | table | shadow 중 실제 CAPTCHA 결과와 AI 권고 비교 |
+| `ai_captcha_challenges` | table | nonce·세션·문제 바인딩을 가진 일회성 challenge 상태 |
 | `ai_training_dataset` | **view** | 학습용 조회 (valid + human/bot + label_source 존재) |
+
+## 위험 점수 로그 변경
+
+`ai_model_predictions`에는 모델 점수 외에 정책 위험 점수와 백엔드 권고 행동을
+저장합니다. 신규 설치는 `db/schema_mysql.sql`의 정의를 사용하면 됩니다. 이미
+테이블을 적용한 환경은 아래 열을 추가한 뒤 서비스를 올려 주세요.
+
+```sql
+ALTER TABLE ai_model_predictions
+  ADD COLUMN risk_score DOUBLE NOT NULL,
+  ADD COLUMN risk_level VARCHAR(16) NOT NULL,
+  ADD COLUMN recommended_action VARCHAR(32) NOT NULL,
+  ADD COLUMN policy_mode VARCHAR(16) NOT NULL DEFAULT 'shadow',
+  ADD COLUMN risk_reasons JSON NOT NULL;
+```
+
+`risk_score`는 봇 확률이 아니라 ML·재생 유사도·세션 빈도를 결합한 정책 점수입니다.
+`recommended_action`은 `allow`, `step_up`, `step_up_and_rate_limit` 중 하나이며,
+최종 허용·차단은 CAPTCHA 백엔드가 결정합니다.
+
+## Shadow mode migration
+
+기존 DB에서 CAPTCHA 연결 전 shadow 검증을 하려면
+`db/migrations/20260723_shadow_mode.sql`을 DB 관리자가 한 번 적용해 주세요.
+
+- `ai_model_predictions.policy_mode`: 해당 예측이 `shadow` 또는 `active`였는지 기록
+- `ai_shadow_outcomes`: 정답 원문 없이 실제 main CAPTCHA 결과와 AI의 would-have action 저장
+
+`ai_shadow_outcomes`는 `attempt_id`를 기본키로 사용하므로, 같은 CAPTCHA 결과의 재전송은
+중복 저장되지 않습니다.
 
 ## ⚠️ FK 연결 요청 (확인 필요)
 

@@ -2,7 +2,8 @@
 
 ## 0. 전제
 
-- **현재 실제 데이터가 없으므로 프로젝트는 자동으로 모델을 학습하지 않습니다.**
+- 실제 DB 데이터는 반드시 읽기 전용 스냅샷으로 고정한 뒤 로컬에서 학습합니다.
+- 현재 production 모델은 없으며, 후보 모델은 보안 게이트를 통과할 때까지 자동 승격하지 않습니다.
 - 준비 검사를 통과하지 못하면: 모델 학습 금지, 기존 모델 덮어쓰기 금지,
   `reports/data_readiness.json` 생성 후 종료 코드 2.
 - 테스트 fixture로 나온 수치는 **최종 성능이 아닙니다.**
@@ -78,11 +79,16 @@ Human=1, Bot=0으로 변환합니다.
   - Replay 원본/복사본은 같은 generator 그룹으로 같은 split
 - split manifest는 `data/metadata/` 에 저장, 누수 자동 검사(`LeakageError`).
 
-## 4. 세 모델 학습
+## 4. 네 모델 학습
 
-RandomForest / XGBoost / LightGBM — **동일한 29 Feature, 동일한 split, 고정 seed,
-클래스 불균형 처리.** validation으로 임계값(threshold)을 정하고, **test는 최종 평가에
-한 번만** 사용합니다. 학습 중 오류가 나면 기존 production 모델을 보존합니다.
+RandomForest / ExtraTrees / XGBoost / LightGBM — **동일한 Feature profile, 동일한 split, 고정 seed,
+클래스 불균형 처리.** 로컬 보안 학습에서는 개발 데이터의 사용자·봇 그룹을 5-fold로
+나눈 OOF 점수로 공통 임계값을 정합니다. 모든 fold의 Human FRR 예산을 만족해야 하며,
+**test는 최종 평가에 한 번만** 사용합니다. 학습 중 오류가 나면 기존 production 모델을
+보존합니다.
+
+Feature v1은 29개, 실험용 Feature v2는 44개다. 두 버전은 같은 데이터·split·seed로
+비교하며 전체 FRR/ASR 게이트를 통과하기 전에는 v2로 교체하지 않는다.
 
 ## 5. 평가 지표
 
@@ -103,9 +109,19 @@ ROC-AUC, PR-AUC, Confusion Matrix, 평균 추론 시간, Feature Importance.
 python -m training.run_training_pipeline
 ```
 
+로컬 DB 스냅샷 파일로 학습할 때는 다음 명령을 사용합니다. 상세한 분할·검증 구조는
+[`docs/LOCAL_TRAINING.md`](LOCAL_TRAINING.md)를 참고하세요.
+
+```bash
+.venv/bin/python -m training.run_local_training \
+  --human-features <human_features.jsonl> \
+  --bot-attempts <synthetic_bots.jsonl> \
+  --external-bot-holdout <playwright_bots.jsonl>
+```
+
 순서: MySQL 확인 → readiness → (미준비면 보고서만) → 데이터 로드 → 그룹 split →
-RF/XGB/LGBM 학습 → validation threshold → test 평가 → 최적 선택 → candidate 저장 →
-조건 충족 시 production 교체.
+RF/ExtraTrees/XGB/LGBM 5-fold OOF 점수 생성 → 공통 threshold 보정 → 개발 데이터 전체 재학습 →
+test 평가 → 최적 선택 → candidate 저장 → 조건 충족 시 production 교체.
 
 옵션: `--check-only`, `--dataset-version`, `--seed`, `--min-human-samples`,
 `--min-bot-samples`, `--min-human-participants`, `--min-bot-families`, `--no-promote`.
@@ -125,7 +141,8 @@ data/metadata/split_manifest_<버전>.json
 ### 모델 번들에 저장되는 것
 
 model 객체, model_name, model_version, Feature 목록, feature_schema_version,
-dataset_version, 학습 시각, 선택 threshold, validation 지표, 라이브러리 버전.
+dataset_version, 학습 시각, 선택 threshold, fold별 threshold 보정 결과, OOF 지표,
+test 지표, 라이브러리 버전.
 
 ## 8. production 교체 조건
 

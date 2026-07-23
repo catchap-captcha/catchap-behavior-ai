@@ -44,7 +44,8 @@ attempt_id, challenge_id, session_id, anonymous_participant_id,
 label, label_source, bot_family, generator_version,
 schema_version, feature_schema_version,
 position_correct, interaction_success, final_drop_error,
-human_score, bot_risk_score, bot_decision, model_version
+human_score, bot_risk_score, bot_decision,
+risk_score, risk_level, recommended_action, risk_reasons, model_version
 ```
 
 `label`은 정답(Human=1, Bot=0)이며 Feature가 아닙니다.
