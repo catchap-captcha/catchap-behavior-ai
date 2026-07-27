@@ -1,0 +1,12 @@
+# Runtime dependencies for the behavior inference API.
+# Training, GAN, LLM, plotting, and test dependencies stay out of deployment.
+fastapi>=0.111,<1.0
+uvicorn[standard]>=0.30,<1.0
+pydantic>=2.7,<3.0
+pydantic-settings>=2.3,<3.0
+SQLAlchemy>=2.0,<3.0
+PyMySQL>=1.1,<2.0
+numpy>=1.26,<3.0
+scikit-learn>=1.5,<2.0
+lightgbm>=4.3,<5.0
+joblib>=1.4,<2.0

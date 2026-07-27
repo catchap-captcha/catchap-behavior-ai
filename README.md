@@ -92,6 +92,7 @@ python -m training.generate_gan_bots             # human-like bot 생성
 - [docs/DB_REQUEST.md](docs/DB_REQUEST.md) — DB 팀 테이블 생성 요청
 - [docs/DATA_SCHEMA.md](docs/DATA_SCHEMA.md) — 원본/Feature 스키마
 - [docs/TRAINING_GUIDE.md](docs/TRAINING_GUIDE.md) — 학습·평가·선택·GAN 가이드
+- [deploy/README.md](deploy/README.md) — 메인 CAPTCHA와 연결하는 내부 AI 서비스 배포 구조
 
 ## 테스트
 

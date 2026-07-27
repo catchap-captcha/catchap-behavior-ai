@@ -1,0 +1,20 @@
+[Unit]
+Description=CatChap behavior AI API
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ms
+Group=ms
+WorkingDirectory=/srv/catchap/ai-service
+EnvironmentFile=/etc/catchap/behavior-ai.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/srv/catchap/ai-service/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8010
+Restart=on-failure
+RestartSec=3
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
