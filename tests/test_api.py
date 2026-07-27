@@ -55,6 +55,10 @@ def client(sqlite_sessionmaker, monkeypatch):
 
 
 def _collect_payload(attempt_id="att_api_1"):
+    events = human_like_events()
+    presented_at_ms = 1_782_900_000_000
+    for event in events:
+        event["t_ms"] += presented_at_ms + 250
     return {
         "schema_version": "1.0",
         "attempt_id": attempt_id,
@@ -63,7 +67,7 @@ def _collect_payload(attempt_id="att_api_1"):
         "anonymous_participant_id": "adult_001",
         "captcha": {"width": 420, "height": 220},
         "timing": {"presented_at": "2026-07-01T10:00:00Z", "submitted_at": "2026-07-01T10:00:02Z"},
-        "events": human_like_events(),
+        "events": events,
         "interaction": {"regrab_count": 0, "retry_count": 0, "pointercancel_count": 0,
                         "empty_click_count": 0, "failed_drop_count": 0},
         "collection": {"label": "human", "label_source": "controlled_collection", "age_group": "adult"},
@@ -167,6 +171,23 @@ def test_predict_routes_candidate_step_up_band_to_second_verification(client):
     assert body["recommended_action"] == "step_up"
     assert body["policy_mode"] == "shadow"
     assert body["reasons"] == ["ml_step_up_band"]
+
+
+def test_predict_never_allows_missing_trusted_server_timing(client):
+    _load_risk_model(0.999999)
+    payload = _collect_payload("att_missing_server_timing")
+    payload.pop("collection", None)
+    payload["timing"] = {}
+
+    response = client.post(
+        "/api/v1/behavior/predict", json=payload, headers=_backend_headers()
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["risk_level"] == "medium"
+    assert body["recommended_action"] == "step_up"
+    assert body["reasons"] == ["invalid_event_telemetry"]
 
 
 def test_shadow_mode_records_would_have_action_without_changing_captcha_verdict(client):

@@ -109,3 +109,16 @@ def test_multiple_reasons_are_preserved_for_audit():
         "dtw_similar_trace",
         "session_rate_exceeded",
     )
+
+
+def test_invalid_event_telemetry_never_receives_allow():
+    decision = fuse_behavior_risk(
+        0.999999,
+        _replay(),
+        _policy(),
+        quality_rejected=True,
+    )
+
+    assert decision.risk_level == "medium"
+    assert decision.recommended_action == "step_up"
+    assert decision.reasons == ("invalid_event_telemetry",)

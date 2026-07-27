@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 QUALITY_VALID = "valid"
@@ -25,6 +26,7 @@ QUALITY_REJECTED = "rejected"
 _OUT_OF_BOUNDS_MARGIN = 0.5   # 50% of width/height beyond the edge
 _MIN_EVENTS = 2
 _MIN_DISTINCT_COORDS = 2
+_SERVER_TIME_TOLERANCE_MS = 5_000
 
 
 @dataclass
@@ -41,6 +43,7 @@ def validate_attempt(
     captcha_height: float | None = None,
     presented_at=None,
     submitted_at=None,
+    enforce_server_time_window: bool = False,
 ) -> QualityResult:
     """Run all quality checks for one attempt.
 
@@ -127,10 +130,34 @@ def validate_attempt(
     if distinct < _MIN_DISTINCT_COORDS:
         hard_fail.append("too_few_distinct_coordinates")
 
-    # 13) submitted_at not before presented_at
-    if presented_at is not None and submitted_at is not None:
-        if submitted_at < presented_at:
+    # 13) submitted_at not before presented_at. The strict event-window check
+    # is reserved for online prediction, where both timestamps come from the
+    # trusted CAPTCHA server. Collection imports may contain legacy relative
+    # event timestamps and must remain readable.
+    if enforce_server_time_window and (
+        presented_at is None or submitted_at is None
+    ):
+        hard_fail.append("missing_server_timing")
+    elif presented_at is not None and submitted_at is not None:
+        presented_ms = _epoch_ms(presented_at)
+        submitted_ms = _epoch_ms(submitted_at)
+        if submitted_ms < presented_ms:
             hard_fail.append("submitted_before_presented")
+        elif enforce_server_time_window:
+            first_event_ms = min(t_vals)
+            last_event_ms = max(t_vals)
+            server_duration_ms = submitted_ms - presented_ms
+            checks["server_duration_ms"] = server_duration_ms
+            checks["event_first_t_ms"] = first_event_ms
+            checks["event_last_t_ms"] = last_event_ms
+            within_server_window = (
+                first_event_ms >= presented_ms - _SERVER_TIME_TOLERANCE_MS
+                and last_event_ms <= submitted_ms + _SERVER_TIME_TOLERANCE_MS
+                and duration <= server_duration_ms + _SERVER_TIME_TOLERANCE_MS
+            )
+            checks["event_timestamps_within_server_window"] = within_server_window
+            if not within_server_window:
+                hard_fail.append("event_timestamps_outside_server_window")
 
     if hard_fail:
         return QualityResult(QUALITY_REJECTED, ";".join(hard_fail), checks)
@@ -142,6 +169,14 @@ def validate_attempt(
 # --------------------------------------------------------------------------- #
 # helpers
 # --------------------------------------------------------------------------- #
+def _epoch_ms(value: datetime) -> int:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return round(value.timestamp() * 1000)
+
+
 def _has_non_finite(events: list[dict[str, Any]]) -> bool:
     for e in events:
         for key in ("t_ms", "x", "y", "x_normalized", "y_normalized"):

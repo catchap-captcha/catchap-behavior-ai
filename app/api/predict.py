@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.api.challenge import require_captcha_backend_key
@@ -23,7 +24,7 @@ from app.schemas.requests import PredictRequest
 from app.schemas.responses import ModelNotReadyResponse, PredictResponse
 from app.services.feature_profiles import get_feature_profile
 from app.services.model_service import model_service
-from app.services.quality_validator import validate_attempt
+from app.services.quality_validator import QUALITY_REJECTED, validate_attempt
 from app.services.replay_detector import compute_replay_features
 from app.services.risk_fusion import RiskFusionPolicy, fuse_behavior_risk
 
@@ -69,6 +70,7 @@ def predict(payload: PredictRequest, session: Session = Depends(get_session)):
         captcha_height=payload.captcha.height,
         presented_at=_to_naive_utc(payload.timing.presented_at),
         submitted_at=_to_naive_utc(payload.timing.submitted_at),
+        enforce_server_time_window=True,
     )
 
     profile = get_feature_profile(
@@ -84,16 +86,24 @@ def predict(payload: PredictRequest, session: Session = Depends(get_session)):
     settings = get_settings()
     now = _utcnow()
     attempts = AttemptRepository(session)
-    replay = compute_replay_features(
-        events,
-        duration_ms=_duration_ms(events),
-        now_epoch_s=now.replace(tzinfo=timezone.utc).timestamp(),
-        history=attempts.recent_session_history(
+    try:
+        history = attempts.recent_session_history(
             session_id=payload.session_id,
             now=now,
             window_seconds=settings.risk_history_window_seconds,
             limit=settings.risk_history_max_attempts,
-        ),
+        )
+    except SQLAlchemyError:
+        # Shadow mode must remain observable during a DB outage. The model can
+        # still score the current trajectory, but replay-history signals are
+        # deliberately unavailable until storage recovers.
+        session.rollback()
+        history = []
+    replay = compute_replay_features(
+        events,
+        duration_ms=_duration_ms(events),
+        now_epoch_s=now.replace(tzinfo=timezone.utc).timestamp(),
+        history=history,
         recent_window_s=float(settings.risk_history_window_seconds),
     )
     assessment = fuse_behavior_risk(
@@ -105,6 +115,7 @@ def predict(payload: PredictRequest, session: Session = Depends(get_session)):
             dtw_similarity_threshold=settings.risk_dtw_similarity_threshold,
             max_attempts_per_minute=settings.risk_max_attempts_per_minute,
         ),
+        quality_rejected=quality.status == QUALITY_REJECTED,
     )
 
     # best-effort persistence of raw attempt + features + prediction

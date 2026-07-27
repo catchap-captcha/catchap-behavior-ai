@@ -89,3 +89,53 @@ def test_submitted_before_presented_rejected():
     )
     assert r.status == QUALITY_REJECTED
     assert "submitted_before_presented" in r.reason
+
+
+def test_epoch_events_inside_server_window_pass():
+    from datetime import datetime, timezone
+
+    presented = datetime(2026, 7, 23, 7, 0, tzinfo=timezone.utc)
+    events = human_like_events()
+    base_ms = round(presented.timestamp() * 1000) + 500
+    for event in events:
+        event["t_ms"] += base_ms
+
+    result = validate_attempt(
+        events,
+        captcha_width=420,
+        captcha_height=220,
+        presented_at=presented,
+        submitted_at=datetime(2026, 7, 23, 7, 0, 5, tzinfo=timezone.utc),
+        enforce_server_time_window=True,
+    )
+
+    assert result.status == QUALITY_VALID
+    assert result.checks["event_timestamps_within_server_window"] is True
+
+
+def test_relative_or_stale_events_outside_server_window_rejected():
+    from datetime import datetime, timezone
+
+    result = validate_attempt(
+        human_like_events(),
+        captcha_width=420,
+        captcha_height=220,
+        presented_at=datetime(2026, 7, 23, 7, 0, tzinfo=timezone.utc),
+        submitted_at=datetime(2026, 7, 23, 7, 0, 5, tzinfo=timezone.utc),
+        enforce_server_time_window=True,
+    )
+
+    assert result.status == QUALITY_REJECTED
+    assert "event_timestamps_outside_server_window" in result.reason
+
+
+def test_online_window_validation_rejects_missing_server_timing():
+    result = validate_attempt(
+        human_like_events(),
+        captcha_width=420,
+        captcha_height=220,
+        enforce_server_time_window=True,
+    )
+
+    assert result.status == QUALITY_REJECTED
+    assert "missing_server_timing" in result.reason

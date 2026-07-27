@@ -72,6 +72,8 @@ def fuse_behavior_risk(
     human_score: float,
     replay: ReplayFeatures,
     policy: RiskFusionPolicy,
+    *,
+    quality_rejected: bool = False,
 ) -> RiskFusionDecision:
     """Return an explainable, non-blocking risk assessment for one attempt."""
     score = float(human_score)
@@ -101,6 +103,9 @@ def fuse_behavior_risk(
     if replay.attempts_per_minute >= policy.max_attempts_per_minute:
         reasons.append("session_rate_exceeded")
         risk_score += policy.session_rate_weight
+    if quality_rejected:
+        reasons.append("invalid_event_telemetry")
+        risk_score = max(risk_score, policy.medium_risk_threshold)
 
     risk_score = round(min(100.0, max(0.0, risk_score)), 2)
     if risk_score >= policy.high_risk_threshold:
