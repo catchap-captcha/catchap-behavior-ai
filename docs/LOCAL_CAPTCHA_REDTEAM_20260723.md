@@ -767,6 +767,30 @@ translate/scale 변종(DTW가 min-max 정규화로 상쇄)을 잡는다. 그러�
 클라이언트 제출형 프로토콜의 최종 잔존 위협이며, 서버 주입 실시간 신호로만
 닫힌다. 운영에서는 세션 위험 누적·시도 제한으로 반복 비용을 높인다.
 
+#### J-11. 방어 라운드 7 — risk_fusion end-to-end + 세션속도 결함 수정
+
+실제 `fuse_behavior_risk` + `compute_replay_features`로 end-to-end 검증
+(내 sketch 아님). 세 발견:
+
+1. **교차 생존 공격 실제 확인**: 좌표지터 변종(path_sim=0.9938, 임계 0.9967
+   바로 아래) + 세션 히스토리 → `allow risk=0.0`. exact=False(지터가
+   fingerprint 변경). 실코드로 잔존 위협 재현.
+
+2. **🔴 실제 결함 발견·수정**: `session_rate_exceeded`가 20/min에서 발동해도
+   action이 `allow`였다. `session_rate_weight=30` < `medium_threshold=40`이라
+   속도 신호 단독으론 step_up에 못 미쳤다. 공격자가 분당 30회 사람점수 재생을
+   퍼부어도 전부 통과(reason만 로그). **수정**: 속도 초과 시 최소 medium으로
+   floor(`risk_fusion.py`). 사람은 분당 20회 CAPTCHA를 풀지 않으므로 FRR
+   안전. 수정 후 20+/min → `step_up`. 회귀 테스트 추가(201 passed).
+
+3. **미사용 신호 정당성 확인**: `repeated_endpoint_count`/`repeated_duration_
+   count`는 계산되나 fusion 미사용. 서로 다른 사람의 **88.7%가 끝점을 공유**
+   (고정 정답존 탓, tol 0.01)하므로 endpoint 신호는 FRR 위험 — 미사용이 옳다.
+
+이 라운드는 근본 한계가 아니라 **가중치 결함을 발견해 실배포 경로(risk_
+fusion)에 반영**한 사례다. 세션 속도 제한이 이제 실제로 동작한다 — 반복
+재생·변종 공장의 운영 비용을 높이는 실질 방어.
+
 #### J-4. 라이브 CAPTCHA 화면 확인
 
 - 프록시(`:18001`)를 통해 라이브 문제·실사진·정답 검증·shadow 점수 패널이

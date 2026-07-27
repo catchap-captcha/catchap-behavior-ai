@@ -102,7 +102,13 @@ def fuse_behavior_risk(
         risk_score += policy.dtw_weight
     if replay.attempts_per_minute >= policy.max_attempts_per_minute:
         reasons.append("session_rate_exceeded")
-        risk_score += policy.session_rate_weight
+        # An inhuman attempt rate must reach at least step_up on its own. The
+        # additive weight alone (30) sits below medium (40), so before this
+        # floor a session firing 20+/min of human-scored replays still got
+        # `allow` with only a logged reason. No real user solves 20 CAPTCHAs a
+        # minute, so flooring here is FRR-safe (see red-team R8).
+        risk_score = max(risk_score + policy.session_rate_weight,
+                         policy.medium_risk_threshold)
     if quality_rejected:
         reasons.append("invalid_event_telemetry")
         risk_score = max(risk_score, policy.medium_risk_threshold)

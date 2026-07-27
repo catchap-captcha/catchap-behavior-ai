@@ -122,3 +122,18 @@ def test_invalid_event_telemetry_never_receives_allow():
     assert decision.risk_level == "medium"
     assert decision.recommended_action == "step_up"
     assert decision.reasons == ("invalid_event_telemetry",)
+
+
+def test_inhuman_session_rate_alone_forces_step_up():
+    # A human-scored trajectory fired at the rate limit must not stay allow:
+    # session_rate_weight (30) sits below medium (40), so before the floor a
+    # 20+/min replay session still returned allow (red-team R8). No real user
+    # solves 20 CAPTCHAs a minute, so flooring at medium is FRR-safe.
+    decision = fuse_behavior_risk(
+        0.999999,
+        _replay(attempts_per_minute=25.0, recent_attempt_count=25),
+        _policy(),
+    )
+
+    assert decision.recommended_action == "step_up"
+    assert "session_rate_exceeded" in decision.reasons
