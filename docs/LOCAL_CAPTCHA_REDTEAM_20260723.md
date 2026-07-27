@@ -419,6 +419,170 @@ LOCAL_ENFORCEMENT_MODE=block_step_up_for_test
 5. 보완 후 Human FRR `3% 이하`, 알려진 Bot ASR `5% 이하`, 미지 family 최악
    ASR `10% 이하`를 같은 고정 기준으로 다시 계산한다.
 
+### 시도 J: 2026-07-27 하드닝 버전 재검증 및 배포 상태 정찰
+
+- 범위: 로컬 하네스(`run_local_shadow_test.command`)로 라이브 GPU 메인
+  CAPTCHA(`61.109.239.231:8000`)에 연결하고, 로컬 행동 AI에는 커밋
+  `74ec5e7`의 하드닝을 반영한 상태로 테스트. 라이브 서버는 읽기만 함.
+
+#### J-1. API 기본 동작
+
+- 인증 없음 / 잘못된 키 → 둘 다 `401`.
+- 합성 직선 봇(26 events, 600ms) → Human `0.0`, Bot risk `1.0`,
+  risk `50.0`, `medium`, `step_up`, `reasons=[ml_bot_score]`.
+- 합성 사람형 곡선(23 events, 1743ms, ease+jitter+중간정지+끝점 3단 보정)
+  → Human `2e-06`, risk `50.0`, `medium`, `step_up`, `[ml_bot_score]`.
+- 관찰: 온라인 `/predict`는 `t_ms`를 **절대 epoch ms**로 요구한다. 0 기준
+  상대시각을 보내면 좌표·궤적과 무관하게 `invalid_event_telemetry`가
+  먼저 뜬다. 절대시각으로 바꾸면 사라진다. 프론트 연동 시 이 계약을
+  반드시 맞춰야 정상 사용자가 전부 `step_up`되지 않는다.
+
+#### J-2. 시도 I 한계 확인 — retime 우회 (핵심)
+
+- 방법: §9-1의 후속. 고정 weakset
+  `output/redteam/live_bypass_search_20260723/redteam_weakset_live_bypass_20260723.jsonl`
+  89건 전부를 `/predict`에 재제출하되 **타임스탬프만** 현재 challenge
+  시간창으로 옮김. 좌표·순서·간격·이벤트 수는 미변경.
+- 결과: **`allow` 36건 / `step_up` 53건 = 40.45%**.
+- 최고 후보(`redteam_search_live_bypass_20260723_004442`): Human `1.0`,
+  Bot risk `0.0`, risk `0.0`, `low`, `allow`, `reasons=[]`.
+- 해석: 시도 I에서 같은 후보가 `event_timestamps_outside_server_window`로
+  막힌 것은 방어가 궤적을 판별해서가 아니라, 보관된 후보가 **상대시각**을
+  들고 있어 창 밖으로 판정된 **포맷 거절**이었다. §8이 예고한 한계
+  ("공격자가 이벤트 시각을 현재 창에 맞춰 다시 쓰면 확정 불가")가 수치로
+  확인됐다. `risk_score 0.0`은 medium 경계(40)보다 40점 아래이므로 임계값
+  조정으로 덮을 거리가 아니다.
+- 한계: `/predict` 직접 호출이라 CAPTCHA 계층 보조 방어(receipt chain,
+  batch delivery timing, 객체 결속)는 경로에 없었다. `mysql_connected:false`
+  라서 세션 히스토리 기반 DTW/replay/빈도 신호도 불활성. 다만 서로 다른
+  후보 36개를 각각 1회 제출하는 공격에는 그 신호들이 도움이 안 된다.
+
+#### J-3. 배포 상태 정찰 (라이브 읽기 전용)
+
+- 행동 AI가 **이미 GPU 서버에 가동 중**: `/home/sw/catchap-behavior`,
+  `sw` 계정, uvicorn `:8010`, uptime 3일 이상.
+- 그러나 미완성:
+  - `grep -c event_timestamps_outside_server_window
+    app/services/quality_validator.py` → `0`. **하드닝이 배포본에 없다.**
+    (하드닝은 로컬 커밋 `74ec5e7`에만 존재.)
+  - `logs/behavior-ai.log`에 `POST /predict` **0건**. 캡차가 호출하지
+    않음(`BEHAVIOR_EVENT_TRANSPORT=off` 추정). → 위 노출은 현재 실경로에
+    없음(완화 요인).
+  - `.env`에 `MYSQL_*` 미설정 → `app/config.py` 기본값(`127.0.0.1`,
+    빈 비밀번호)으로 접속 실패 → `mysql_connected:false`. DB 서버
+    `210.109.52.114:3306`(MySQL 8.0.46)은 GPU에서 도달 가능하며 설정만
+    없다.
+  - systemd 유닛 없음(수동 기동, 재부팅 시 소멸). 배포본이 git 저장소
+    아님(버전 추적 불가). 경로·서비스계정이 `deploy/`(`/srv/catchap/
+    ai-service`, `User=ms`)와 불일치.
+
+#### J-2b. 전면 봇 스윕 (183+ 요청, 헤드리스)
+
+하드닝 AI(`74ec5e7`)에 대고 세 축으로 통제 비교. 라이브 서버 미접촉.
+
+**[A] 합성 봇 16종 × 3 seed = 48건 (retime, 정상 시간창)**
+
+- 대상: 직선 30/60Hz, ease-in/out, 베지어(부드러움/떨림), 스플라인
+  waypoint, 미니점프, 과다샘플(200점), 저샘플(5점), 좌표양자화, 가속
+  버스트, 감속끝, stop-go, 오버슛, 지그재그, **사람 흉내 최고작**.
+- 결과: **`allow` 0 / 48**. 전부 `step_up`.
+- 해석: 손으로 설계한 봇으로는 하드닝을 못 뚫는다. bell-speed+bow+jitter+
+  pause+3단 보정을 모두 넣은 human_mimic도 막혔다.
+
+**[B] 시간창 검증 우회 변형 (최고 후보 1건)**
+
+| 변형 | 결과 |
+|---|---|
+| B1 상대시각 | `step_up` ✅ |
+| B2 retime(그대로) | **`allow`** ⚠️ |
+| B3 시각 +3000ms 이동(창 안) | **`allow`** ⚠️ |
+| B4 시각 +6000ms(창 밖) | `step_up` ✅ |
+| B5 시간축 0.5배 압축 | **`allow`** ⚠️ |
+| B6 시간축 2.0배 확장 | **`allow`** ⚠️ |
+| B7 timing 필드 누락 | `step_up` ✅ |
+
+- 해석: 하드닝이 검사하는 것은 "이벤트가 서버 시간창 **안**에 있는가"
+  단 하나다. 창 안이면 시각을 이동(B3)·압축(B5)·확장(B6)해도 모두 통과하고,
+  창을 벗어나거나(B4) 서버 시각이 없을 때(B7)만 막는다. **모델은 시간
+  왜곡에 반응하지 않으며, 궤적의 출처·진위는 전혀 검증하지 못한다.**
+
+**[C] weakset 89건 통제 비교**
+
+- 상대시각 그대로 → `allow` **0/89**.
+- 시각만 현재 창으로 이동 → `allow` **36/89 (40.4%)**. 궤적 0픽셀 변경.
+- retimed allow 36건 특성: 이벤트 수 25~243(평균 130), 지속 2.8~10.5초
+  (평균 6.6초), `event_coalescing` 0.14~0.30(평균 0.20). 이벤트 수가 넓게
+  퍼져 있어 "점 개수" 컷오프로는 못 거르며, coalescing 범위는 §iter1
+  발견과 일치한다. 정상 사용자도 이 범위에 들어오므로 단일 규칙 차단은
+  FRR을 악화시킨다(§6.4와 동일한 한계).
+
+- 종합 결론: **하드닝은 "봇처럼 보이는 궤적"은 전부 막지만, "사람처럼
+  보이도록 미리 만든 궤적"은 시각만 현재 창에 맞추면 통과한다.** B2~B6이
+  이를 결정적으로 보여준다 — 동일 궤적을 시간축으로 어떻게 변형해도
+  판정이 바뀌지 않는다. 근본 원인은 모델 정확도가 아니라 서버가 이벤트
+  출처를 증명하지 못하는 프로토콜이며, 해결은 11.4에 있다.
+
+#### J-4. 라이브 CAPTCHA 화면 확인
+
+- 프록시(`:18001`)를 통해 라이브 문제·실사진·정답 검증·shadow 점수 패널이
+  모두 정상 로딩됨(`/api/captcha/assets/{id}/image` 200).
+- 이 세션에서 정상 사용자 궤적(Human FRR) 실측은 아직 수집 전. 라이브 DB에
+  기록이 남으므로 레드팀 궤적과 정상 궤적을 challenge ID로 분리 관리해야
+  한다.
+
+## 11. 보완 방법 (2026-07-27 기준 정리)
+
+우선순위와 선행관계를 함께 기록한다. **A → D → 연동** 순서를 어기면
+하드닝 없는 배포본이 실경로에 들어간다.
+
+### 11.1 즉시 (라이브 무영향)
+
+- **[완료] 하드닝 커밋** `74ec5e7`: 온라인 `/predict`의 서버 시간창
+  검증 + 품질 거부의 위험 결합(고득점이라도 `step_up` 상한). 커밋 메시지에
+  "부분 방어이며 출처 증명 아님"을 명시.
+- **[대기] 배포본 갱신**: 위 3개 파일을 `/home/sw/catchap-behavior`에 반영
+  후 재시작. `POST /predict` 0건이라 무중단. 갱신 전 원본 백업, 배포본을
+  git 저장소로 전환 권장.
+
+### 11.2 연동 선행조건
+
+- **`.env`에 `MYSQL_*` 설정** (`MYSQL_HOST=210.109.52.114`,
+  `MYSQL_DATABASE=catchap_behavior_ai`, 계정/비밀번호는 담당자 직접 입력).
+  없으면 shadow 결과가 기록되지 않아 데이터가 쌓이지 않는다.
+- **DB 스키마 확인**: `catchap_behavior_ai` 존재 여부와
+  `20260723_shadow_mode.sql`(`behavior_shadow_predictions`) 적용 여부.
+- **systemd 유닛 설치**(경로·`User` 실서버에 맞게 수정). 연동 후에는
+  재부팅 생존이 필수.
+
+### 11.3 shadow 연동 (라이브 무영향, fail-open)
+
+- 캡차 측 `BEHAVIOR_AI_URL` + `BEHAVIOR_EVENT_TRANSPORT=shadow`
+  (`ms` 담당). `behavior_client`가 fail-open이라 AI 장애가 캡차 통과·실패를
+  바꾸지 않는다.
+- **목적**: 실제 사용자 궤적 + AI 점수 쌍 수집 → **Human FRR 최초 실측**.
+  이것이 현재 최대 블로커의 해소 경로다.
+
+### 11.4 근본 방어 (연동과 병행, 최대 작업)
+
+- **이벤트 신뢰 프로토콜**(`docs/BEHAVIOR_EVENT_TRUST_PROTOCOL.md`):
+  제출 시점 일괄 수신을 버리고, 수집 중 서버가 도착 시각·증가 sequence를
+  직접 기록. retime 우회(J-2)의 근본 원인이 여기다. 백엔드 팀 협의 필요.
+- **retimed holdout 고정화**: J-2의 89건 retimed 세트를
+  `training_usage=external_holdout_only`로 봉인해 회귀 기준으로만 사용.
+  학습·임계값 튜닝 금지(`training/holdout_registry.py`).
+
+### 11.5 정책 승격 (지표 충족 후에만)
+
+- 단계적: `low=allow` → `high=step_up+rate limit` → `medium=step_up`.
+  `medium`을 마지막에 켠다(정상 사용자 다수가 이 구간).
+- **`active` 승격은 retime 우회를 막지 못한다**: 통과 36건은 `step_up`이
+  아니라 `allow`를 받으므로 정책 모드 변경으로 해결되지 않는다. 11.4가
+  선행되어야 한다.
+- `step_up`의 의미 정의 필요(추가 캡차 1회면 자동화가 계속 시도 가능).
+  세션 위험 누적·시도 제한·성공무관 challenge 소비를 함께 검증.
+- 승격 게이트: Human FRR ≤3%, 알려진 Bot ASR ≤5%, 미지 family 최악
+  ASR ≤10%, AI 응답 p99 < 1.5s(타임아웃). 현재 모두 미실측 또는 미달.
+
 ## 10. 실험 기록 원칙
 
 앞으로 각 시도에 다음 항목을 반드시 추가한다.
