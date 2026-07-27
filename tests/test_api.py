@@ -130,6 +130,20 @@ def test_predict_requires_captcha_backend_key(client):
     assert response.status_code == 401
 
 
+def test_predict_rejects_oversized_event_payload(client):
+    # Red-team R10: an unbounded event list let a bot ship an 18.7MB / 100k-event
+    # payload. Cap is 5000 (>3x the ~1500 human max), so a real drag is never
+    # rejected but a DoS-sized payload is refused at the schema before scoring.
+    payload = _collect_payload("att_oversized")
+    payload.pop("collection", None)
+    one = payload["events"][0]
+    payload["events"] = [dict(one, seq=i, t_ms=one["t_ms"] + i) for i in range(5001)]
+    response = client.post(
+        "/api/v1/behavior/predict", json=payload, headers=_backend_headers()
+    )
+    assert response.status_code == 422, response.text
+
+
 def test_predict_returns_advisory_risk_and_detects_same_session_replay(client):
     _load_risk_model(0.9)
     first_payload = _collect_payload("att_risk_1")

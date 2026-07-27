@@ -12,6 +12,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+# Upper bound on pointer events per attempt. The observed human maximum is
+# ~1500; 5000 blocks oversized/DoS payloads (red-team R10) with a wide margin.
+MAX_EVENTS_PER_ATTEMPT = 5000
+
 EventType = Literal["pointerdown", "pointermove", "pointerup", "pointercancel"]
 Label = Literal["human", "bot", "unknown"]
 LabelSource = Literal[
@@ -109,6 +113,14 @@ class _AttemptBase(BaseModel):
         # Structural floor only; content quality is judged by quality_validator.
         if len(v) == 0:
             raise ValueError("events must not be empty")
+        # Upper bound guards the scorer against oversized payloads (red-team
+        # R10: 100k events = 18.7MB / 1.7s CPU with no cap). The observed human
+        # maximum is ~1500 events, so 5000 leaves a wide margin and never
+        # rejects a real drag.
+        if len(v) > MAX_EVENTS_PER_ATTEMPT:
+            raise ValueError(
+                f"events exceed {MAX_EVENTS_PER_ATTEMPT} (got {len(v)})"
+            )
         return v
 
 
