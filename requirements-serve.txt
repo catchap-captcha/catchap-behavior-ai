@@ -1,0 +1,31 @@
+# Serving-only dependencies for the behavior AI API.
+#
+# Use this on the backend server, not requirements.txt — the extras in that file
+# (torch, xgboost, matplotlib, anthropic) are training / analysis / chatbot
+# tooling that the inference path never imports. torch alone is the bulk of a
+# full install and the deployed service has never had it installed.
+#
+# Verified 2026-07-28: a clean venv built from this file imports app.main,
+# loads the two-view LightGBM bundle, and connects to MySQL. 38 packages, 337MB.
+
+# Core API
+fastapi>=0.111,<1.0
+uvicorn[standard]>=0.30,<1.0
+pydantic>=2.7,<3.0
+pydantic-settings>=2.3,<3.0
+
+# Database (MySQL 8.0)
+SQLAlchemy>=2.0,<3.0
+PyMySQL>=1.1,<2.0
+# Required for caching_sha2_password, MySQL 8.0's default. Without it the first
+# connect after a server restart or FLUSH PRIVILEGES fails; a warm auth cache
+# hides the problem, so it surfaces as an intermittent startup error.
+cryptography>=42
+
+# Model serving. lightgbm is what the promoted bundle unpickles into;
+# scikit-learn and joblib load the pipeline around it.
+numpy>=1.26,<3.0
+pandas>=2.2,<3.0
+scikit-learn>=1.5,<2.0
+lightgbm>=4.3,<5.0
+joblib>=1.4,<2.0

@@ -1,12 +1,15 @@
 [Unit]
 Description=CatChap behavior AI API
-After=network-online.target mysql.service
+# The DB is on a separate host (210.109.52.114), so wait for the network only —
+# there is no local mysql.service to order against.
+After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=ms
-Group=ms
+# Set these to the backend server's service account.
+User=catchap
+Group=catchap
 WorkingDirectory=/srv/catchap/ai-service
 EnvironmentFile=/etc/catchap/behavior-ai.env
 Environment=PYTHONUNBUFFERED=1
