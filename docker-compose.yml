@@ -1,0 +1,28 @@
+# Behavior AI — runs on the backend VM as its own compose project.
+#
+# Deliberately separate from /home/ubuntu/catchap-backend/docker-compose.yml so
+# deploying or rolling back this service cannot disturb the backend API. Bring it
+# down with `docker compose down` and the host is exactly as it was.
+#
+#   docker compose up -d --build
+#   curl -s http://127.0.0.1:8010/health
+services:
+  behavior-ai:
+    build: .
+    image: catchap-behavior-ai:latest
+    container_name: catchap-behavior-ai
+    env_file: .env
+    environment:
+      TZ: Asia/Seoul          # match the backend container so created_at lines up
+    restart: unless-stopped   # survives a reboot; the GPU deployment was hand-started and would not have
+    ports:
+      # 127.0.0.1 only — same posture as the GPU deployment. The browser must
+      # never reach this service; it is called by the CAPTCHA backend, which will
+      # live on this host too. Do NOT change this to 0.0.0.0 or a private IP
+      # without first restricting :8010 at the firewall.
+      - "127.0.0.1:8010:8010"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
