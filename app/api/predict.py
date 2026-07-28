@@ -9,6 +9,7 @@ the sole owner of allow/block and challenge-token decisions.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, status
@@ -27,6 +28,8 @@ from app.services.model_service import model_service
 from app.services.quality_validator import QUALITY_REJECTED, validate_attempt
 from app.services.replay_detector import compute_replay_features
 from app.services.risk_fusion import RiskFusionPolicy, fuse_behavior_risk
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["predict"])
 
@@ -216,4 +219,12 @@ def _persist(
         )
         session.commit()
     except Exception:
+        # Persistence is best-effort so a storage fault never fails a live
+        # CAPTCHA, but it must never be invisible: a silent rollback here once
+        # left /predict storing nothing at all while /health still read "ok",
+        # which in turn left the replay detector with an empty history.
         session.rollback()
+        logger.exception(
+            "predict: failed to persist attempt %s — scoring returned, nothing stored",
+            payload.attempt_id,
+        )

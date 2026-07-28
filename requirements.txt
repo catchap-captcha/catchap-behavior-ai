@@ -7,6 +7,12 @@ pydantic-settings>=2.3,<3.0
 # Database (MySQL 8.0)
 SQLAlchemy>=2.0,<3.0
 PyMySQL>=1.1,<2.0
+# MySQL 8.0 defaults to caching_sha2_password. PyMySQL needs cryptography for
+# the RSA key exchange that full (cold-cache) auth performs over a plaintext
+# connection — without it the FIRST connect after a server restart or a
+# FLUSH PRIVILEGES dies with "'cryptography' package is required", while a
+# warm auth cache hides the problem entirely.
+cryptography>=42
 
 # Data / ML
 pandas>=2.2,<3.0

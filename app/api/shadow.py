@@ -57,7 +57,9 @@ def record_shadow_outcome(
         ) from None
 
     return ShadowOutcomeResponse(
-        attempt_id=outcome.attempt_id,
+        # Echo the caller's id, never the internal CHAR(36) surrogate key the
+        # deployed schema stores it under.
+        attempt_id=payload.attempt_id,
         stored=stored,
         idempotent=not stored,
         policy_mode="shadow",

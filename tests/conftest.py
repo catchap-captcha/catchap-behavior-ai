@@ -11,12 +11,38 @@ import math
 from typing import Any
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database.mysql_models import Base
 from app.services.feature_extractor import FEATURE_NAMES, FEATURE_SCHEMA_VERSION, extract_features
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _isolate_from_local_env():
+    """Keep a developer's local `.env` out of the suite.
+
+    `Settings` reads `.env` from the working directory, so a local
+    PRODUCTION_MODEL_DIR pointing at a real candidate bundle silently loads a
+    model and breaks every test that asserts the no-model behaviour. Tests must
+    describe the code, not the machine they run on.
+    """
+    import os
+
+    from app.config import get_settings
+
+    previous = os.environ.get("PRODUCTION_MODEL_DIR")
+    os.environ["PRODUCTION_MODEL_DIR"] = "models/__tests_no_model__"
+    get_settings.cache_clear()
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("PRODUCTION_MODEL_DIR", None)
+        else:
+            os.environ["PRODUCTION_MODEL_DIR"] = previous
+        get_settings.cache_clear()
 
 
 @pytest.fixture()
@@ -29,7 +55,17 @@ def sqlite_sessionmaker():
         poolclass=StaticPool,
         future=True,
     )
+
+    # SQLite ignores foreign keys unless asked. Without this the tests cannot
+    # see wrong insert ordering, which is exactly how a bug that made /predict
+    # store nothing on MySQL (errno 1452) passed the whole suite.
+    @event.listens_for(engine, "connect")
+    def _enable_sqlite_foreign_keys(dbapi_connection, _record):  # noqa: ANN001
+        dbapi_connection.execute("PRAGMA foreign_keys=ON")
+
     Base.metadata.create_all(engine)
+    with engine.connect() as conn:
+        assert conn.execute(text("PRAGMA foreign_keys")).scalar() == 1
     return sessionmaker(bind=engine, expire_on_commit=False, future=True)
 
 

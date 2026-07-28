@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -39,6 +40,56 @@ def _sha256(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+# --- deployed-schema adapters -------------------------------------------------
+# The deployed tables use a CHAR(36) surrogate key and a stricter vocabulary than
+# the service does. Everything that translates between the two lives here so the
+# API layer keeps speaking in its own terms. See mysql_models for the mapping.
+
+_ATTEMPT_NAMESPACE = uuid.UUID("6f9619ff-8b86-d011-b42d-00c04fc964ff")
+
+# The deployed CHECK on ai_behavior_attempts.quality_status.
+_QUALITY_STATUS = {"accepted": "valid", "rejected": "invalid", "pending": "pending"}
+
+
+def attempt_uuid(attempt_id: str) -> str:
+    """Map a caller's attempt id onto the deployed CHAR(36) primary key.
+
+    The CAPTCHA sends ``ms-{challenge_id}-a{n}`` (42 chars), which does not fit
+    ``id CHAR(36)``. UUIDv5 keeps the mapping deterministic, so retries and the
+    idempotency check in ``exists()`` still line up. The original string is kept
+    in ``metadata.source_attempt_id``.
+    """
+    try:
+        return str(uuid.UUID(attempt_id))
+    except (ValueError, AttributeError):
+        return str(uuid.uuid5(_ATTEMPT_NAMESPACE, attempt_id))
+
+
+def _row_id() -> str:
+    return str(uuid.uuid4())
+
+
+def _clamp01(value: float | None) -> float | None:
+    """Deployed CHECKs reject anything outside [0, 1] on normalized columns."""
+    if value is None:
+        return None
+    return min(1.0, max(0.0, float(value)))
+
+
+def _quality_status(status: str | None) -> str:
+    return _QUALITY_STATUS.get(status or "pending", "review")
+
+
+def _label(label: str | None) -> str | None:
+    """Deployed CHECK allows NULL / 'human' / 'bot'. Inference traffic is NULL."""
+    return label if label in ("human", "bot") else None
+
+
+def _predicted_label(risk_level: str) -> str:
+    """Deployed CHECK allows human / bot / uncertain."""
+    return {"low": "human", "high": "bot"}.get(risk_level, "uncertain")
+
+
 @dataclass(frozen=True)
 class IssuedChallenge:
     challenge_id: str
@@ -61,10 +112,21 @@ class AttemptRepository:
 
     # --- reads ---
     def get_attempt(self, attempt_id: str) -> BehaviorAttempt | None:
-        return self.session.get(BehaviorAttempt, attempt_id)
+        return self.session.get(BehaviorAttempt, attempt_uuid(attempt_id))
 
     def exists(self, attempt_id: str) -> bool:
         return self.get_attempt(attempt_id) is not None
+
+    def _next_attempt_number(self, challenge_id: str) -> int:
+        """Deployed UNIQUE KEY is (challenge_id, attempt_number), so retries of the
+        same challenge must not both claim 1.
+        """
+        highest = self.session.scalar(
+            select(func.max(BehaviorAttempt.attempt_number)).where(
+                BehaviorAttempt.challenge_id == challenge_id
+            )
+        )
+        return int(highest or 0) + 1
 
     def recent_session_history(
         self,
@@ -140,31 +202,45 @@ class AttemptRepository:
         from the authenticated collection context before calling this.
         """
         now = _utcnow()
+        source_id = attempt["attempt_id"]
         row = BehaviorAttempt(
-            attempt_id=attempt["attempt_id"],
+            attempt_id=attempt_uuid(source_id),
             challenge_id=attempt["challenge_id"],
             session_id=attempt["session_id"],
             anonymous_participant_id=attempt.get("anonymous_participant_id"),
-            schema_version=attempt["schema_version"],
-            captcha_width=attempt["captcha_width"],
-            captcha_height=attempt["captcha_height"],
-            presented_at=attempt.get("presented_at"),
+            attempt_number=self._next_attempt_number(attempt["challenge_id"]),
+            captcha_width=attempt.get("captcha_width"),
+            captcha_height=attempt.get("captcha_height"),
+            # started_at is NOT NULL in the deployed schema.
+            presented_at=attempt.get("presented_at") or now,
             submitted_at=attempt.get("submitted_at"),
             position_correct=attempt.get("position_correct"),
-            interaction_success=attempt.get("interaction_success"),
-            final_drop_error=attempt.get("final_drop_error"),
-            label=attempt.get("label", "unknown"),
+            label=_label(attempt.get("label")),
             label_source=attempt.get("label_source"),
             bot_family=attempt.get("bot_family"),
-            generator_version=attempt.get("generator_version"),
-            age_group=attempt.get("age_group", "unknown"),
             consent_version=attempt.get("consent_version"),
-            quality_status=attempt.get("quality_status", "pending"),
+            quality_status=_quality_status(attempt.get("quality_status")),
             rejection_reason=attempt.get("rejection_reason"),
+            extra_metadata={
+                "source_attempt_id": source_id,
+                "schema_version": attempt.get("schema_version"),
+                "age_group": attempt.get("age_group", "unknown"),
+                "generator_version": attempt.get("generator_version"),
+                "interaction_success": attempt.get("interaction_success"),
+                "final_drop_error": attempt.get("final_drop_error"),
+                # 'unknown' is not a legal label in the deployed CHECK.
+                "raw_label": attempt.get("label"),
+            },
             created_at=now,
             updated_at=now,
         )
         self.session.add(row)
+        # The deployed FKs point at ai_behavior_attempts.id, and the ORM only
+        # orders inserts it can see a relationship for. Flush the parent before
+        # anything references it. Without this MySQL raises errno 1452 and the
+        # whole bundle is rolled back.
+        self.session.flush()
+
         for e in events:
             self.session.add(
                 PointerEvent(
@@ -172,46 +248,92 @@ class AttemptRepository:
                     seq=e["seq"],
                     event_type=e["event_type"],
                     t_ms=e["t_ms"],
-                    x=e["x"],
-                    y=e["y"],
-                    x_normalized=e.get("x_normalized"),
-                    y_normalized=e.get("y_normalized"),
-                    target_role=e.get("target_role"),
+                    x=e.get("x"),
+                    y=e.get("y"),
+                    x_normalized=_clamp01(e.get("x_normalized")),
+                    y_normalized=_clamp01(e.get("y_normalized")),
+                    event_metadata=(
+                        {"target_role": e["target_role"]} if e.get("target_role") else None
+                    ),
                     created_at=now,
                 )
             )
         if interaction is not None:
+            counts = {
+                "pointer_move_count": sum(1 for e in events if e["event_type"] == "pointermove"),
+                "pointer_down_count": sum(1 for e in events if e["event_type"] == "pointerdown"),
+                "pointer_up_count": sum(1 for e in events if e["event_type"] == "pointerup"),
+            }
             self.session.add(
                 InteractionSummary(
+                    summary_id=_row_id(),
                     attempt_id=row.attempt_id,
-                    regrab_count=interaction.get("regrab_count", 0),
-                    retry_count=interaction.get("retry_count", 0),
-                    pointercancel_count=interaction.get("pointercancel_count", 0),
-                    empty_click_count=interaction.get("empty_click_count", 0),
-                    failed_drop_count=interaction.get("failed_drop_count", 0),
+                    total_event_count=len(events),
+                    calculated_at=now,
+                    # Dedicated columns since 2026-07-28 (DB request C).
+                    **{
+                        name: int(interaction.get(name, 0))
+                        for name in (
+                            "regrab_count",
+                            "retry_count",
+                            "pointercancel_count",
+                            "empty_click_count",
+                            "failed_drop_count",
+                        )
+                    },
+                    **counts,
                 )
             )
         return row
 
+    # Deployed columns that measure exactly the same quantity as one of ours,
+    # only under a different name. Anything not listed here stays JSON-only.
+    _NAMED_FEATURES = (
+        "event_count", "duration_ms", "total_distance", "displacement",
+        "avg_speed", "speed_std", "avg_acceleration", "jerk_mean",
+        "direction_changes", "linearity",
+    )
+
     def save_features(
         self, attempt_id: str, features: dict[str, float], feature_schema_version: str
     ) -> None:
-        """Upsert the 29-feature row for an attempt."""
-        existing = self.session.get(AttemptFeatures, attempt_id)
-        payload = {name: float(features.get(name, 0.0)) for name in FEATURE_NAMES}
-        if existing is None:
-            row = AttemptFeatures(
-                attempt_id=attempt_id,
-                feature_schema_version=feature_schema_version,
-                calculated_at=_utcnow(),
-                **payload,
+        """Upsert one feature row.
+
+        ``extra_features`` is the authoritative copy — the deployed named columns
+        are a different feature set from this extractor's, so only exact-synonym
+        columns are filled alongside it. Nothing the extractor produced is lost.
+        """
+        key = attempt_uuid(attempt_id)
+        payload = {name: float(value) for name, value in features.items()}
+        named = {
+            name: (_clamp01(payload.get(name)) if name == "linearity" else payload.get(name))
+            for name in self._NAMED_FEATURES
+            if name in payload
+        }
+        existing = self.session.scalar(
+            select(AttemptFeatures).where(
+                AttemptFeatures.attempt_id == key,
+                AttemptFeatures.feature_schema_version == feature_schema_version,
             )
-            self.session.add(row)
-        else:
-            for name, value in payload.items():
-                setattr(existing, name, value)
-            existing.feature_schema_version = feature_schema_version
-            existing.calculated_at = _utcnow()
+        )
+        if existing is None:
+            self.session.add(
+                AttemptFeatures(
+                    features_id=_row_id(),
+                    attempt_id=key,
+                    feature_schema_version=feature_schema_version,
+                    extraction_status="completed",
+                    extra_features=payload,
+                    calculated_at=_utcnow(),
+                    **named,
+                )
+            )
+            return
+        for name, value in named.items():
+            setattr(existing, name, value)
+        existing.extra_features = payload
+        existing.extraction_status = "completed"
+        existing.calculated_at = _utcnow()
 
     def learning_exists(self, attempt_id: str) -> bool:
         return self.session.get(LearningAttempt, attempt_id) is not None
@@ -221,23 +343,77 @@ class AttemptRepository:
         self.session.add(LearningAttempt(created_at=_utcnow(), **fields))
 
     def save_security_features(self, attempt_id: str, feats: dict[str, Any]) -> None:
-        existing = self.session.get(SecurityFeatures, attempt_id)
+        key = attempt_uuid(attempt_id)
+        mapped = {
+            "path_similarity_score": _clamp01(feats.get("path_similarity_score")),
+            "exact_replay_detected": bool(feats.get("exact_replay_detected", False)),
+            "attempts_per_minute": feats.get("attempts_per_minute"),
+            "recent_attempt_count": int(feats.get("recent_attempt_count") or 0),
+            # No deployed column for these two.
+            "security_flags": {
+                "repeated_duration_count": feats.get("repeated_duration_count"),
+                "repeated_endpoint_count": feats.get("repeated_endpoint_count"),
+            },
+        }
+        existing = self.session.scalar(
+            select(SecurityFeatures).where(SecurityFeatures.attempt_id == key)
+        )
         if existing is None:
             self.session.add(
-                SecurityFeatures(attempt_id=attempt_id, calculated_at=_utcnow(), **feats)
+                SecurityFeatures(
+                    security_id=_row_id(), attempt_id=key, calculated_at=_utcnow(), **mapped
+                )
             )
-        else:
-            for k, v in feats.items():
-                setattr(existing, k, v)
-            existing.calculated_at = _utcnow()
+            return
+        for name, value in mapped.items():
+            setattr(existing, name, value)
+        existing.calculated_at = _utcnow()
 
 
 class PredictionRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def save_prediction(self, **kwargs: Any) -> ModelPrediction:
-        row = ModelPrediction(predicted_at=_utcnow(), **kwargs)
+    def save_prediction(
+        self,
+        *,
+        attempt_id: str,
+        human_score: float,
+        bot_risk_score: float,
+        bot_decision: str,
+        risk_score: float,
+        risk_level: str,
+        recommended_action: str,
+        policy_mode: str,
+        risk_reasons: list[str],
+        threshold: float,
+        model_name: str,
+        model_version: str,
+        feature_schema_version: str,
+        inference_latency_ms: int | None = None,
+    ) -> ModelPrediction:
+        row = ModelPrediction(
+            prediction_id=_row_id(),
+            attempt_id=attempt_uuid(attempt_id),
+            model_name=model_name,
+            model_version=model_version,
+            feature_schema_version=feature_schema_version,
+            # Deployed CHECK allows human/bot/uncertain only — the caller's
+            # "<level>_risk" string is kept in model_metadata.
+            bot_decision=_predicted_label(risk_level),
+            human_score=_clamp01(human_score),
+            bot_risk_score=_clamp01(bot_risk_score),
+            model_score=float(human_score),
+            threshold=threshold,
+            risk_score=max(0.0, float(risk_score)),
+            risk_level=risk_level,
+            recommended_action=recommended_action,
+            risk_reasons=list(risk_reasons),
+            inference_latency_ms=inference_latency_ms,
+            # policy_mode has no deployed column (20260723 migration not applied).
+            model_metadata={"policy_mode": policy_mode, "bot_decision": bot_decision},
+            predicted_at=_utcnow(),
+        )
         self.session.add(row)
         return row
 
@@ -255,23 +431,25 @@ class ShadowOutcomeRepository:
         main_captcha_verdict: str,
         final_verdict: str,
     ) -> tuple[ShadowOutcome, bool]:
-        existing = self.session.get(ShadowOutcome, attempt_id)
+        key = attempt_uuid(attempt_id)
+        existing = self.session.get(ShadowOutcome, key)
         if existing is not None:
             return existing, False
 
         prediction = self.session.scalar(
             select(ModelPrediction)
-            .where(ModelPrediction.attempt_id == attempt_id)
-            .order_by(ModelPrediction.predicted_at.desc(), ModelPrediction.prediction_id.desc())
+            .where(ModelPrediction.attempt_id == key)
+            .order_by(ModelPrediction.predicted_at.desc())
             .limit(1)
         )
         if prediction is None:
             raise LookupError("prediction_not_found")
-        if prediction.policy_mode != "shadow":
+        # policy_mode moved into model_metadata — no deployed column for it.
+        if (prediction.model_metadata or {}).get("policy_mode") != "shadow":
             raise ValueError("prediction_was_not_shadowed")
 
         outcome = ShadowOutcome(
-            attempt_id=attempt_id,
+            attempt_id=key,
             main_captcha_verdict=main_captcha_verdict,
             final_verdict=final_verdict,
             would_have_action=prediction.recommended_action,

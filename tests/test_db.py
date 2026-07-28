@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from app.database.mysql_models import BehaviorAttempt, PointerEvent
-from app.database.repositories import AttemptRepository
+from app.database.repositories import AttemptRepository, attempt_uuid
 from app.services.feature_extractor import FEATURE_SCHEMA_VERSION, extract_features
 from tests.conftest import human_like_events
 
@@ -32,10 +32,12 @@ def test_save_bundle_persists_attempt_and_events(session):
     repo.save_attempt_bundle(attempt=_attempt_dict(), events=events, interaction={})
     session.commit()
 
-    stored = session.get(BehaviorAttempt, "att_1")
+    # The deployed PK is a CHAR(36) surrogate; attempt_uuid() is the mapping.
+    stored = session.get(BehaviorAttempt, attempt_uuid("att_1"))
     assert stored is not None
+    assert stored.extra_metadata["source_attempt_id"] == "att_1"
     stored_events = session.execute(
-        select(PointerEvent).where(PointerEvent.attempt_id == "att_1")
+        select(PointerEvent).where(PointerEvent.attempt_id == attempt_uuid("att_1"))
     ).scalars().all()
     assert len(stored_events) == len(events)
     # events preserved in seq order
@@ -60,15 +62,26 @@ def test_save_features_upsert(session):
     session.commit()
 
     from app.database.mysql_models import AttemptFeatures
-    row = session.get(AttemptFeatures, "att_1")
+
+    def _features_row():
+        return session.execute(
+            select(AttemptFeatures).where(
+                AttemptFeatures.attempt_id == attempt_uuid("att_1")
+            )
+        ).scalar_one_or_none()
+
+    row = _features_row()
     assert row is not None
     assert row.feature_schema_version == FEATURE_SCHEMA_VERSION
     assert abs(row.event_count - feats["event_count"]) < 1e-9
+    # extra_features is the authoritative copy — every extracted feature is there.
+    assert row.extra_features.keys() == feats.keys()
 
     # upsert: recompute and overwrite
     feats2 = dict(feats)
     feats2["event_count"] = 999.0
     repo.save_features("att_1", feats2, FEATURE_SCHEMA_VERSION)
     session.commit()
-    row2 = session.get(AttemptFeatures, "att_1")
+    row2 = _features_row()
     assert row2.event_count == 999.0
+    assert row2.extra_features["event_count"] == 999.0
