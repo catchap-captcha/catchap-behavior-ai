@@ -17,6 +17,67 @@
 
 ---
 
+## 0-1. PoW 병합 완료 — 배포만 남았습니다 (2026-07-29 17:20)
+
+`origin/ms`(09c5351) 8커밋을 `sw-captcha`에 병합해 푸시했습니다. **`523e555`**
+
+```
+54a33d7  merge: ms PoW + 방어 스택을 행동 신뢰 프로토콜과 통합
+523e555  test: verify() 통합 경로 회귀 테스트 3건
+```
+
+테스트 **26 통과** (기존 23 + 신규 3).
+
+### 판단이 필요했던 곳 — 확인 부탁드립니다
+
+민서님 `09c5351`의 그림자 채점이 `payload.events`, 즉 **클라이언트가 보낸 궤적**을
+모델에 넘기고 있었습니다. 그러면 봇이 그럴듯한 궤적을 만들어 보내는 것만으로 사람
+점수를 받습니다(레드팀에서 사람 궤적 재생 97.5% 확인한 그 경로입니다). 그래서
+**채점 소스는 서버 저장 배치로 두고 그 부분만 버렸습니다.** `record_shadow_outcome`은
+제 쪽에 이미 있습니다.
+
+**민서님의 규칙 게이트는 전부 살렸습니다** — `automation_score`, 행동지문,
+클러스터 차단. 토큰 발급 직전에 그대로 둡니다. 행동 AI 게이트만
+`resolve_final_verdict`와 중복이라 제외했습니다.
+
+PoW 게이트는 verify 앞쪽에 뒀는데 **중복선택 422 검사보다는 뒤**입니다. 12개 리스트
+중복 검사가 sha256보다 싸고, 그건 PoW와 무관하게 422인 요청이라서입니다.
+
+`create_challenge`는 합집합이라 이제 **`behavior_nonce`와 `pow`가 한 응답에 함께**
+실립니다. 병합 전에는 PoW 챌린지에 nonce가 없어서 프런트가 배치를 아예 못 보내는
+상태였습니다.
+
+### 배포는 제가 못 합니다
+
+`/srv/codex-workspaces/ms` 가 `drwx------ ms ms` 이고 제 계정은 sudo에 비번이
+필요합니다. **`sw-captcha` 배포는 민서님이 해주셔야 합니다.**
+
+---
+
+## (참고) 16:34 재배포 때 확인된 것
+
+오늘 낮에는 `:8000` 에 행동 수집이 **들어가 있었습니다.** 제가 07:32(UTC) 에 실제로
+배치 4건 전송 → 전부 `200` + 영수증 정상, `verify` `200` 까지 확인했습니다.
+
+그런데 **16:34:08 에 `:8000` 이 재시작되면서 그 코드가 사라졌습니다.**
+
+```
+behavior-batches 라우트   openapi.json 에 0건        (제 코드에선 무조건 등록됩니다)
+프론트 번들               "behavior-batches" 0회, "batch_seq" 0회
+/health/ready             {status, approved_questions} — behavior_* 필드 전무
+```
+
+`BEHAVIOR_EVENT_TRANSPORT=off` 로는 이 증상이 안 나옵니다. 라우트 등록은 설정과 무관하고,
+`/health/ready` 도 `off` 여도 `behavior_event_transport: "off"` 를 반환합니다.
+**코드 자체가 없는 상태** 입니다 — `sw-captcha` 가 빠진 브랜치로 재배포된 것으로 보입니다.
+
+**16:34 에 무엇을 배포하셨는지 확인 부탁드립니다.** 그 빌드에는 PoW(`pow.seed`/`bits:17`)가
+있는데 `sw-captcha` 에는 PoW 코드가 없습니다. 두 작업이 서로 다른 브랜치에 있는 것 같습니다.
+**PoW 쪽으로 `sw-captcha` 를 병합**하는 게 맞다면 제가 하겠습니다 — 어느 브랜치인지만
+알려주세요.
+
+---
+
 ## 1. 무엇이 추가되나
 
 캡차를 푸는 동안의 포인터 궤적을 **서버가 신뢰할 수 있는 형태로** 수집해서 AI가 봇인지 판별합니다.
@@ -100,8 +161,36 @@ onPointerCancel={cancelDrag}
 | 변수 | 값 | 비고 |
 |---|---|---|
 | `BEHAVIOR_AI_URL` | `http://127.0.0.1:8010` | 기본값. AI가 같은 GPU 서버에 있습니다 |
-| `BEHAVIOR_AI_BACKEND_KEY` | **현재 값 그대로** | AI 쪽이 기존 키를 승계했습니다. 변경 불필요 |
+| `BEHAVIOR_AI_BACKEND_KEY` | ⚠️ **AI 쪽 값과 일치시켜야 합니다** | 아래 3-2b 참조 |
 | `BEHAVIOR_POLICY_MODE` | `shadow` | 유지 |
+
+### 3-2b. ⚠️ 정정 (2026-07-29 16:40) — 백엔드 키는 "그대로 두면" 안 됩니다
+
+위 표에서 처음에 **"현재 값 그대로, 변경 불필요"** 라고 적었습니다. **제가 틀렸습니다.**
+AI가 기존 키를 승계했다고 가정했는데, 실제로는 AI가 자기 `.env`의 `CAPTCHA_BACKEND_API_KEY`
+(64자)를 쓰고 있고 캡차가 보내는 값과 다릅니다. 그래서 캡차→AI 호출이 전부
+**401 Unauthorized** 로 거부됩니다.
+
+401이 나면 `behavior_client` 가 fail-open 으로 "점수 없음"을 반환하므로 **캡차는 정상
+통과되고 에러도 안 보입니다.** 대신 AI 기록이 한 건도 남지 않습니다. 실제로
+`ai_behavior_attempts` 에 캡차에서 온 행이 0건입니다.
+
+```bash
+# GPU 서버에서 — AI 가 기대하는 값
+grep '^CAPTCHA_BACKEND_API_KEY=' /home/sw/catchap-behavior/.env
+
+# 캡차 .env 의 BEHAVIOR_AI_BACKEND_KEY 를 위 값과 똑같이 맞춰주세요
+```
+
+확인 방법 (풀이 1회 후):
+
+```bash
+grep 'behavior/predict' /home/sw/catchap-behavior/logs/behavior-ai.log | tail -3
+#   200 OK  → 정상 연동
+#   401     → 아직 키가 다릅니다
+```
+
+키를 제 쪽에서 캡차 값에 맞춰도 됩니다. 어느 방향이든 알려주시면 제가 맞추겠습니다.
 
 `shadow`는 **AI 점수를 기록만 하고 통과/실패 판정에 반영하지 않습니다.** 사용자 영향 0입니다.
 `active`는 오탐률 측정 전까지 켜지 마세요 (참여자 54명 중 4명이 3% 초과 상태).
