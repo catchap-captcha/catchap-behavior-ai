@@ -1,6 +1,6 @@
 # 백엔드 승급 연동 — 적용 패치 (2026-07-29)
 
-작성: 최성우 / 대상: `catchap-backend` (`210.109.52.124:/home/ubuntu/catchap-backend`)
+작성: 조성원 / 대상: `catchap-backend` (`210.109.52.124:/home/ubuntu/catchap-backend`)
 
 **배포는 하지 않았습니다.** 코드만 준비했습니다. 적용은 백엔드 담당자가 검토 후 하시면 됩니다.
 

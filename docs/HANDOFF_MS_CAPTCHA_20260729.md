@@ -1,6 +1,6 @@
 # 김민서님께 — `sw-captcha` 병합 결과 및 배포 요청 (2026-07-29)
 
-보낸 사람: 최성우 (행동 기반 봇 판별 AI)
+보낸 사람: 조성원 (행동 기반 봇 판별 AI)
 
 ---
 
@@ -156,4 +156,4 @@ window.parent.postMessage({ type:"catchap-verified", token: ..., lecture_id: ...
 
 ---
 
-문의: 최성우 (wwdhogo@gmail.com)
+문의: 조성원 (wwdhogo@gmail.com)
