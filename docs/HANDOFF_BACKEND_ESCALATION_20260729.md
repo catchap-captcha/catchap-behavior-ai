@@ -127,6 +127,39 @@ suspicion >= THRESHOLD  →  진도 응답에 { captcha_required: true, lecture_
 
 캡차를 푸는 동안 시청은 멈추는 게 자연스럽습니다.
 
+### 4-3b. ⚠️ 마이그레이션은 백엔드 계정으로 실행할 수 없습니다 (2026-07-29 정정)
+
+프로덕션 DB 권한을 확인한 결과, 백엔드 런타임 계정은 **DML 전용**입니다.
+
+```
+GRANT USAGE ON *.*
+GRANT SELECT, INSERT, UPDATE, DELETE ON catchap_dev_db.*
+        ↑ ALTER / CREATE / DROP 없음
+```
+
+따라서 `alembic upgrade head` 를 백엔드 계정으로 돌리면 `ALTER command denied` 로 실패합니다.
+기존 69개 마이그레이션은 **DDL 권한을 가진 별도 계정**으로 적용된 것으로 보입니다
+(앱이 실수로 스키마를 바꾸지 못하게 분리한 설계로, 그 자체는 옳습니다).
+
+**즉 컬럼 추가는 DB 담당자 작업입니다.** 실행 방식에 따라 둘로 갈립니다.
+
+**(a) DDL 계정으로 `alembic upgrade head`** — 권장. 사슬이 정상적으로 진행됩니다.
+다만 프로덕션이 `course_order_01` 이라 **`course_payment_pg_02`(결제) 가 함께 적용됩니다.**
+골라 적용할 수 없습니다. 결제 마이그레이션을 일부러 보류한 상태라면 먼저 조율이 필요합니다.
+
+**(b) SQL 수동 적용** — 아래 한 줄입니다.
+
+```sql
+ALTER TABLE lecture_watch_progress
+  ADD COLUMN bot_suspicion INT NOT NULL DEFAULT 0;
+```
+
+⚠️ **이 경우 `alembic_version` 을 건드리지 마세요.** `lecture_botsusp_01` 로 stamp 하면
+alembic 은 그 앞의 `course_payment_pg_02`(결제)까지 적용된 것으로 간주합니다 —
+실제로는 적용되지 않았으므로 **결제 마이그레이션이 영구히 누락됩니다.**
+버전을 그대로 두면 나중에 (a)로 정상 적용할 때 컬럼 존재 검사가 있어 중복 없이 넘어갑니다
+(마이그레이션 파일에 `if _COL in cols: return` 을 넣어뒀습니다).
+
 ### 4-4. 토큰 검증 → 카운터 리셋
 
 ```

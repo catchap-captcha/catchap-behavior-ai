@@ -41,8 +41,11 @@ patch -p1 < lecture_service.patch
 patch -p1 < lectures.patch
 cp main_captcha_client.py app/clients/
 cp lecture_botsusp_01_bot_suspicion.py alembic/versions/
-alembic upgrade head
 ```
+
+⚠️ **`alembic upgrade head` 는 백엔드 계정으로 실행되지 않습니다.** 런타임 계정이 DML
+전용이라(`ALTER` 권한 없음) DDL 권한을 가진 계정 — 즉 DB 담당자 — 이 필요합니다.
+자세한 내용과 수동 SQL 은 `docs/HANDOFF_BACKEND_ESCALATION_20260729.md` 4-3b 절 참조.
 
 원본이 **CRLF** 라 그대로 유지했습니다. 4개 패치 모두 순수 추가이고 삭제는 1줄
 (`advance()`의 `return {` → `state = {`)뿐입니다.
