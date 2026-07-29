@@ -47,8 +47,13 @@ def _sha256(value: str) -> str:
 
 _ATTEMPT_NAMESPACE = uuid.UUID("6f9619ff-8b86-d011-b42d-00c04fc964ff")
 
-# The deployed CHECK on ai_behavior_attempts.quality_status.
-_QUALITY_STATUS = {"accepted": "valid", "rejected": "invalid", "pending": "pending"}
+# quality_validator emits valid / pending / rejected (QUALITY_* constants).
+# The deployed CHECK allows pending / valid / invalid / review, so only
+# "rejected" actually needs renaming. An earlier version of this map keyed on
+# "accepted", which does not exist upstream — every genuinely valid attempt
+# fell through to "review" and the CHECK accepted it silently, so nothing
+# selecting quality_status='valid' would have found a single row.
+_QUALITY_STATUS = {"valid": "valid", "rejected": "invalid", "pending": "pending"}
 
 
 def attempt_uuid(attempt_id: str) -> str:
