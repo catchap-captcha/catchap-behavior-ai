@@ -26,7 +26,12 @@
 | `lectures.patch` | `app/api/v1/endpoints/lectures.py` (+59) |
 | `main_captcha_client.py` | **신규** → `app/clients/main_captcha_client.py` |
 | `lecture_botsusp_01_bot_suspicion.py` | **신규** → `alembic/versions/` |
-| `test_escalation.py` | 로직 검증 (DB·FastAPI 불필요) |
+| `tests__test_bot_escalation.py` | → `tests/test_bot_escalation.py` (pytest 10건) |
+
+> **더 나은 경로가 있습니다.** 이 패치는 서버 스냅샷 기준으로 만든 것이고, 그 뒤
+> `catchap-backend` 레포의 `jy` 브랜치(배포본과 일치)에 **직접 적용해 커밋했습니다.**
+> 레포 자체 테스트 **345 passed**로 검증됐습니다. 아래 수동 적용보다 그 브랜치를
+> 받는 편이 낫습니다 — 이 폴더는 설계 설명과 대조용으로 남깁니다.
 
 ```bash
 cd /home/ubuntu/catchap-backend
@@ -96,17 +101,19 @@ enforce  임계 초과 시 응답에 captcha_required 를 실어 보냄
 
 ## 검증
 
+레포 클론에 적용해 **실제 테스트 스위트로** 확인했습니다.
+
 ```
-$ python3 test_escalation.py
-가산·상한 ✅  임계 판정 ✅  off 모드 무동작 ✅
-설정 누락 시 off 강등 ✅  알 수 없는 모드 값 → off ✅  리셋 ✅
-모두 통과
+백엔드 전체    345 passed, 1 skipped
+강의 테스트만   82 passed        ← advance()·claim_session 을 건드렸는데 회귀 없음
+신규 승급       10 passed
 ```
 
-DB·FastAPI 없이 순수 로직만 확인합니다. `python3 -m py_compile`로 4개 파일 문법도 확인했습니다.
+신규 테스트가 잡는 것: 가중치·상한·임계값(경계), `off` 가 판정뿐 아니라 누적도 안 하는지,
+캡차 설정 누락 시 `off` 강등, 모드 값 오타 처리, **일시정지 하트비트로는 의심도가
+씻기지 않는지**(재생을 멈춰두고 카운터를 0으로 만드는 우회 차단).
 
-**검증하지 못한 것**: 실제 하트비트 경로에서의 동작. 백엔드를 띄울 권한이 없어
-`advance()` 안에서의 실측은 못 했습니다. 적용 후 `record` 모드 로그로 확인이 필요합니다.
+**검증하지 못한 것**: 실서버 하트비트에서의 동작. 적용 후 `record` 모드 로그로 확인이 필요합니다.
 
 ## 프런트 (나중, 소규모)
 
