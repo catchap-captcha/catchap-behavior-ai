@@ -1,0 +1,353 @@
+-- catchap_ai 스키마 재현 DDL (A안 — 현재 배포 모양 그대로)
+--
+-- 원본: catchap_dev_db (10.0.1.168) 의 배포 테이블을 SHOW CREATE TABLE 로 추출.
+-- 추출일 2026-07-30. AUTO_INCREMENT 잔여값은 제거했다(새 스키마는 1부터).
+--
+-- ⚠️ ai_training_dataset (VIEW) 는 포함돼 있지 않다.
+--    catchap_backend 계정에 SHOW VIEW 권한이 없어 정의를 못 읽었다.
+--    레포의 db/schema_mysql.sql 에 같은 이름 뷰가 있지만 그건 레포 원본
+--    컬럼명(attempt_id / anonymous_participant_id) 기준이라 배포 모양
+--    (id / participant_id) 에는 맞지 않는다. 추측으로 만들면 학습 데이터가
+--    조용히 달라지므로 DB 팀에서 SHOW CREATE VIEW 결과를 받아 적용한다.
+--
+--    이 뷰는 학습 경로 전용이다(training/build_dataset.py). 서빙(predict/collect)
+--    에는 쓰이지 않으므로, 테이블만 먼저 만들어 전환해도 수집은 정상 동작한다.
+
+-- 생성 순서는 FK 의존을 따른다. SHOW CREATE TABLE 출력은 알파벳 순이라
+-- 그대로 실행하면 자식(ai_attempt_features)이 부모(ai_behavior_attempts)보다
+-- 먼저 와서 errno 1215 로 실패한다.
+--
+-- 제외: ai_predictions
+--   0행이고 app/ training/ 어디서도 참조하지 않는다. 그런데 이 테이블만
+--   captcha_assets 를 참조하는 FK 를 갖고 있어서, ai_* 만 있는 새 스키마에서는
+--   생성 자체가 불가능하다. 쓰지 않는 테이블 때문에 스키마 경계를 무너뜨릴
+--   이유가 없어 뺐다. 필요해지면 그때 FK 없이 만들면 된다.
+
+-- ===== 1) 부모 =====
+
+
+-- ai_behavior_attempts
+CREATE TABLE `ai_behavior_attempts` (
+  `id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `challenge_id` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `session_id` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `participant_id` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `attempt_number` int unsigned NOT NULL DEFAULT '1',
+  `label` varchar(16) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `label_source` varchar(32) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `bot_type` varchar(32) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `quality_status` varchar(24) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending',
+  `quality_reason` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `verification_result` varchar(24) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending',
+  `is_correct` tinyint(1) DEFAULT NULL,
+  `expected_target_count` int unsigned DEFAULT NULL,
+  `selected_object_count` int unsigned DEFAULT NULL,
+  `selected_object_ids` json DEFAULT NULL,
+  `device_type` varchar(24) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `pointer_type` varchar(16) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `browser_name` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `operating_system` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `viewport_width` int unsigned DEFAULT NULL,
+  `viewport_height` int unsigned DEFAULT NULL,
+  `screen_width` int unsigned DEFAULT NULL,
+  `screen_height` int unsigned DEFAULT NULL,
+  `device_pixel_ratio` double DEFAULT NULL,
+  `started_at` datetime(6) NOT NULL,
+  `submitted_at` datetime(6) DEFAULT NULL,
+  `completed_at` datetime(6) DEFAULT NULL,
+  `reaction_time_ms` int unsigned DEFAULT NULL,
+  `total_duration_ms` int unsigned DEFAULT NULL,
+  `consent_version` varchar(32) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `metadata` json DEFAULT NULL,
+  `created_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `updated_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_ai_behavior_attempts_challenge_attempt` (`challenge_id`,`attempt_number`),
+  KEY `idx_ai_behavior_attempts_challenge_id` (`challenge_id`),
+  KEY `idx_ai_behavior_attempts_session_id` (`session_id`),
+  KEY `idx_ai_behavior_attempts_participant_id` (`participant_id`),
+  KEY `idx_ai_behavior_attempts_label` (`label`),
+  KEY `idx_ai_behavior_attempts_quality_status` (`quality_status`),
+  KEY `idx_ai_behavior_attempts_label_source` (`label_source`),
+  KEY `idx_ai_behavior_attempts_created_at` (`created_at`),
+  CONSTRAINT `chk_ai_behavior_attempts_label` CHECK (((`label` is null) or (`label` in (_utf8mb4'human',_utf8mb4'bot')))),
+  CONSTRAINT `chk_ai_behavior_attempts_pointer_type` CHECK (((`pointer_type` is null) or (`pointer_type` in (_utf8mb4'mouse',_utf8mb4'touch',_utf8mb4'pen',_utf8mb4'unknown')))),
+  CONSTRAINT `chk_ai_behavior_attempts_quality_status` CHECK ((`quality_status` in (_utf8mb4'pending',_utf8mb4'valid',_utf8mb4'invalid',_utf8mb4'review',_utf8mb4'corrupted'))),
+  CONSTRAINT `chk_ai_behavior_attempts_verification_result` CHECK ((`verification_result` in (_utf8mb4'pending',_utf8mb4'passed',_utf8mb4'failed',_utf8mb4'expired',_utf8mb4'error')))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+-- ai_captcha_challenges
+CREATE TABLE `ai_captcha_challenges` (
+  `id` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `nonce_hash` char(64) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `session_id` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `question_id` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `challenge_type` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'object_drag',
+  `purpose` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'signup',
+  `status` varchar(24) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'issued',
+  `issued_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `expires_at` datetime(6) NOT NULL,
+  `started_at` datetime(6) DEFAULT NULL,
+  `completed_at` datetime(6) DEFAULT NULL,
+  `consumed_at` datetime(6) DEFAULT NULL,
+  `attempt_count` int unsigned NOT NULL DEFAULT '0',
+  `max_attempts` int unsigned NOT NULL DEFAULT '3',
+  `client_fingerprint_hash` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `client_ip_hash` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `metadata` json DEFAULT NULL,
+  `created_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `updated_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_ai_captcha_challenges_nonce_hash` (`nonce_hash`),
+  KEY `idx_ai_captcha_challenges_session_id` (`session_id`),
+  KEY `idx_ai_captcha_challenges_question_id` (`question_id`),
+  KEY `idx_ai_captcha_challenges_status` (`status`),
+  KEY `idx_ai_captcha_challenges_expires_at` (`expires_at`),
+  KEY `idx_ai_captcha_challenges_session_status` (`session_id`,`status`),
+  CONSTRAINT `chk_ai_captcha_challenges_attempt_count` CHECK ((`attempt_count` <= `max_attempts`)),
+  CONSTRAINT `chk_ai_captcha_challenges_expiration` CHECK ((`expires_at` > `issued_at`)),
+  CONSTRAINT `chk_ai_captcha_challenges_status` CHECK ((`status` in (_utf8mb4'issued',_utf8mb4'in_progress',_utf8mb4'passed',_utf8mb4'failed',_utf8mb4'expired',_utf8mb4'consumed',_utf8mb4'cancelled')))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+-- ai_model_configs
+CREATE TABLE `ai_model_configs` (
+  `id` char(36) NOT NULL,
+  `provider` varchar(60) NOT NULL,
+  `model_id` varchar(120) NOT NULL,
+  `name` varchar(100) NOT NULL,
+  `enabled` tinyint(1) NOT NULL DEFAULT '1',
+  `cost_in_usd` float NOT NULL DEFAULT '0',
+  `cost_out_usd` float NOT NULL DEFAULT '0',
+  `tokens_in` bigint NOT NULL DEFAULT '0',
+  `tokens_out` bigint NOT NULL DEFAULT '0',
+  `created_at` datetime NOT NULL,
+  `updated_at` datetime NOT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+
+-- ===== 2) 자식 (ai_behavior_attempts.id 참조) =====
+
+
+-- ai_attempt_features
+CREATE TABLE `ai_attempt_features` (
+  `id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `attempt_id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `feature_version` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'v1',
+  `reaction_time_ms` double DEFAULT NULL,
+  `total_duration_ms` double DEFAULT NULL,
+  `active_duration_ms` double DEFAULT NULL,
+  `idle_duration_ms` double DEFAULT NULL,
+  `pointer_event_count` int unsigned DEFAULT NULL,
+  `pointer_move_count` int unsigned DEFAULT NULL,
+  `pointer_down_count` int unsigned DEFAULT NULL,
+  `pointer_up_count` int unsigned DEFAULT NULL,
+  `drag_count` int unsigned DEFAULT NULL,
+  `drop_count` int unsigned DEFAULT NULL,
+  `wrong_click_count` int unsigned DEFAULT NULL,
+  `wrong_drag_count` int unsigned DEFAULT NULL,
+  `correction_count` int unsigned DEFAULT NULL,
+  `object_revisit_count` int unsigned DEFAULT NULL,
+  `hesitation_count` int unsigned DEFAULT NULL,
+  `pause_count` int unsigned DEFAULT NULL,
+  `total_path_length` double DEFAULT NULL,
+  `drag_path_length` double DEFAULT NULL,
+  `straight_line_distance` double DEFAULT NULL,
+  `straightness_ratio` double DEFAULT NULL,
+  `average_speed` double DEFAULT NULL,
+  `max_speed` double DEFAULT NULL,
+  `speed_stddev` double DEFAULT NULL,
+  `average_acceleration` double DEFAULT NULL,
+  `max_acceleration` double DEFAULT NULL,
+  `average_jerk` double DEFAULT NULL,
+  `average_curvature` double DEFAULT NULL,
+  `direction_change_count` int unsigned DEFAULT NULL,
+  `movement_entropy` double DEFAULT NULL,
+  `extraction_status` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'completed',
+  `extraction_error` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `extra_features` json DEFAULT NULL,
+  `extracted_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `created_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `updated_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_ai_attempt_features_attempt_version` (`attempt_id`,`feature_version`),
+  KEY `idx_ai_attempt_features_attempt_id` (`attempt_id`),
+  KEY `idx_ai_attempt_features_feature_version` (`feature_version`),
+  KEY `idx_ai_attempt_features_extraction_status` (`extraction_status`),
+  CONSTRAINT `fk_ai_attempt_features_attempt` FOREIGN KEY (`attempt_id`) REFERENCES `ai_behavior_attempts` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `chk_ai_attempt_features_extraction_status` CHECK ((`extraction_status` in (_utf8mb4'pending',_utf8mb4'completed',_utf8mb4'failed'))),
+  CONSTRAINT `chk_ai_attempt_features_straightness` CHECK (((`straightness_ratio` is null) or (`straightness_ratio` between 0 and 1)))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+-- ai_interaction_summaries
+CREATE TABLE `ai_interaction_summaries` (
+  `id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `attempt_id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `total_event_count` int unsigned NOT NULL DEFAULT '0',
+  `pointer_move_count` int unsigned NOT NULL DEFAULT '0',
+  `pointer_down_count` int unsigned NOT NULL DEFAULT '0',
+  `pointer_up_count` int unsigned NOT NULL DEFAULT '0',
+  `drag_start_count` int unsigned NOT NULL DEFAULT '0',
+  `drag_move_count` int unsigned NOT NULL DEFAULT '0',
+  `drop_count` int unsigned NOT NULL DEFAULT '0',
+  `object_select_count` int unsigned NOT NULL DEFAULT '0',
+  `object_remove_count` int unsigned NOT NULL DEFAULT '0',
+  `wrong_click_count` int unsigned NOT NULL DEFAULT '0',
+  `wrong_drag_count` int unsigned NOT NULL DEFAULT '0',
+  `correction_count` int unsigned NOT NULL DEFAULT '0',
+  `object_revisit_count` int unsigned NOT NULL DEFAULT '0',
+  `regrab_count` int unsigned NOT NULL DEFAULT '0',
+  `retry_count` int unsigned NOT NULL DEFAULT '0',
+  `pointercancel_count` int unsigned NOT NULL DEFAULT '0',
+  `empty_click_count` int unsigned NOT NULL DEFAULT '0',
+  `failed_drop_count` int unsigned NOT NULL DEFAULT '0',
+  `hesitation_count` int unsigned NOT NULL DEFAULT '0',
+  `pause_count` int unsigned NOT NULL DEFAULT '0',
+  `focus_count` int unsigned NOT NULL DEFAULT '0',
+  `blur_count` int unsigned NOT NULL DEFAULT '0',
+  `visibility_change_count` int unsigned NOT NULL DEFAULT '0',
+  `reaction_time_ms` int unsigned DEFAULT NULL,
+  `decision_time_ms` int unsigned DEFAULT NULL,
+  `active_duration_ms` int unsigned DEFAULT NULL,
+  `idle_duration_ms` int unsigned DEFAULT NULL,
+  `total_duration_ms` int unsigned DEFAULT NULL,
+  `calculated_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `metadata` json DEFAULT NULL,
+  `created_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `updated_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_ai_interaction_summaries_attempt_id` (`attempt_id`),
+  KEY `idx_ai_interaction_summaries_calculated_at` (`calculated_at`),
+  CONSTRAINT `fk_ai_interaction_summaries_attempt` FOREIGN KEY (`attempt_id`) REFERENCES `ai_behavior_attempts` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+-- ai_model_predictions
+CREATE TABLE `ai_model_predictions` (
+  `id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `attempt_id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `model_name` varchar(128) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `model_version` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `feature_version` varchar(32) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `predicted_label` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `human_probability` double DEFAULT NULL,
+  `bot_probability` double DEFAULT NULL,
+  `model_score` double NOT NULL,
+  `decision_threshold` double DEFAULT NULL,
+  `risk_score` double NOT NULL,
+  `risk_level` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `recommended_action` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `risk_reasons` json NOT NULL,
+  `inference_latency_ms` int unsigned DEFAULT NULL,
+  `model_metadata` json DEFAULT NULL,
+  `predicted_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `created_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`),
+  KEY `idx_ai_model_predictions_attempt_id` (`attempt_id`),
+  KEY `idx_ai_model_predictions_model` (`model_name`,`model_version`),
+  KEY `idx_ai_model_predictions_predicted_label` (`predicted_label`),
+  KEY `idx_ai_model_predictions_risk_level` (`risk_level`),
+  KEY `idx_ai_model_predictions_recommended_action` (`recommended_action`),
+  KEY `idx_ai_model_predictions_predicted_at` (`predicted_at`),
+  CONSTRAINT `fk_ai_model_predictions_attempt` FOREIGN KEY (`attempt_id`) REFERENCES `ai_behavior_attempts` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `chk_ai_model_predictions_bot_probability` CHECK (((`bot_probability` is null) or (`bot_probability` between 0 and 1))),
+  CONSTRAINT `chk_ai_model_predictions_human_probability` CHECK (((`human_probability` is null) or (`human_probability` between 0 and 1))),
+  CONSTRAINT `chk_ai_model_predictions_label` CHECK ((`predicted_label` in (_utf8mb4'human',_utf8mb4'bot',_utf8mb4'uncertain'))),
+  CONSTRAINT `chk_ai_model_predictions_recommended_action` CHECK ((`recommended_action` in (_utf8mb4'allow',_utf8mb4'step_up',_utf8mb4'step_up_and_rate_limit'))),
+  CONSTRAINT `chk_ai_model_predictions_risk_score` CHECK ((`risk_score` >= 0))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+-- ai_pointer_events
+CREATE TABLE `ai_pointer_events` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `attempt_id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `seq` int unsigned NOT NULL,
+  `event_type` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `object_id` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `client_timestamp_ms` bigint unsigned NOT NULL,
+  `elapsed_ms` int unsigned DEFAULT NULL,
+  `x_normalized` double DEFAULT NULL,
+  `y_normalized` double DEFAULT NULL,
+  `x_pixel` double DEFAULT NULL,
+  `y_pixel` double DEFAULT NULL,
+  `movement_x` double DEFAULT NULL,
+  `movement_y` double DEFAULT NULL,
+  `pressure` double DEFAULT NULL,
+  `button_code` smallint DEFAULT NULL,
+  `buttons_mask` smallint DEFAULT NULL,
+  `pointer_type` varchar(16) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `viewport_width` int unsigned DEFAULT NULL,
+  `viewport_height` int unsigned DEFAULT NULL,
+  `event_metadata` json DEFAULT NULL,
+  `created_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_ai_pointer_events_attempt_seq` (`attempt_id`,`seq`),
+  KEY `idx_ai_pointer_events_attempt_id` (`attempt_id`),
+  KEY `idx_ai_pointer_events_event_type` (`event_type`),
+  KEY `idx_ai_pointer_events_attempt_timestamp` (`attempt_id`,`client_timestamp_ms`),
+  CONSTRAINT `fk_ai_pointer_events_attempt` FOREIGN KEY (`attempt_id`) REFERENCES `ai_behavior_attempts` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `chk_ai_pointer_events_normalized_x` CHECK (((`x_normalized` is null) or (`x_normalized` between 0 and 1))),
+  CONSTRAINT `chk_ai_pointer_events_normalized_y` CHECK (((`y_normalized` is null) or (`y_normalized` between 0 and 1))),
+  CONSTRAINT `chk_ai_pointer_events_pressure` CHECK (((`pressure` is null) or (`pressure` between 0 and 1)))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+-- ai_security_features
+CREATE TABLE `ai_security_features` (
+  `id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `attempt_id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `replay_similarity_score` double DEFAULT NULL,
+  `exact_sequence_match` tinyint(1) NOT NULL DEFAULT '0',
+  `nonce_reuse_detected` tinyint(1) NOT NULL DEFAULT '0',
+  `challenge_reuse_detected` tinyint(1) NOT NULL DEFAULT '0',
+  `session_mismatch_detected` tinyint(1) NOT NULL DEFAULT '0',
+  `timestamp_anomaly_detected` tinyint(1) NOT NULL DEFAULT '0',
+  `event_order_anomaly_detected` tinyint(1) NOT NULL DEFAULT '0',
+  `webdriver_detected` tinyint(1) NOT NULL DEFAULT '0',
+  `headless_browser_detected` tinyint(1) NOT NULL DEFAULT '0',
+  `automation_property_detected` tinyint(1) NOT NULL DEFAULT '0',
+  `duplicate_fingerprint_count` int unsigned NOT NULL DEFAULT '0',
+  `recent_session_attempt_count` int unsigned NOT NULL DEFAULT '0',
+  `recent_challenge_attempt_count` int unsigned NOT NULL DEFAULT '0',
+  `recent_failure_count` int unsigned NOT NULL DEFAULT '0',
+  `session_frequency_score` double DEFAULT NULL,
+  `challenge_frequency_score` double DEFAULT NULL,
+  `device_fingerprint_hash` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `ip_hash` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `user_agent_hash` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `security_flags` json DEFAULT NULL,
+  `calculated_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `created_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `updated_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_ai_security_features_attempt_id` (`attempt_id`),
+  KEY `idx_ai_security_features_replay_similarity` (`replay_similarity_score`),
+  KEY `idx_ai_security_features_device_fingerprint` (`device_fingerprint_hash`),
+  KEY `idx_ai_security_features_ip_hash` (`ip_hash`),
+  CONSTRAINT `fk_ai_security_features_attempt` FOREIGN KEY (`attempt_id`) REFERENCES `ai_behavior_attempts` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `chk_ai_security_features_replay_score` CHECK (((`replay_similarity_score` is null) or (`replay_similarity_score` between 0 and 1)))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+-- ai_shadow_outcomes
+CREATE TABLE `ai_shadow_outcomes` (
+  `attempt_id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `main_captcha_verdict` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `final_verdict` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `would_have_action` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `risk_level` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `model_version` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `recorded_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `created_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`attempt_id`),
+  KEY `idx_ai_shadow_outcomes_action` (`would_have_action`),
+  KEY `idx_ai_shadow_outcomes_recorded_at` (`recorded_at`),
+  CONSTRAINT `fk_ai_shadow_outcomes_attempt` FOREIGN KEY (`attempt_id`) REFERENCES `ai_behavior_attempts` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `chk_ai_shadow_outcomes_action` CHECK ((`would_have_action` in (_utf8mb4'allow',_utf8mb4'step_up',_utf8mb4'step_up_and_rate_limit'))),
+  CONSTRAINT `chk_ai_shadow_outcomes_final_verdict` CHECK ((`final_verdict` in (_utf8mb4'passed',_utf8mb4'failed'))),
+  CONSTRAINT `chk_ai_shadow_outcomes_main_verdict` CHECK ((`main_captcha_verdict` in (_utf8mb4'passed',_utf8mb4'failed')))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
