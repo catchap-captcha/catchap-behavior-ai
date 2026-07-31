@@ -209,7 +209,9 @@ STYLES = {"linear": _linear, "bezier": _bezier, "replay": _replay}
 
 def _events_for(challenge: dict[str, Any], style: str, rng: random.Random,
                 trace: list[dict[str, Any]] | None,
-                timing: str = "synthetic") -> tuple[list[list[dict]], list[str]]:
+                timing: str = "synthetic", drag: str = "all",
+                moves: int | None = None, drag_count: int | None = None,
+                target_ms: int | None = None) -> tuple[list[list[dict]], list[str]]:
     """Build the batched event stream for one solve.
 
     Batches mirror what the browser sends: the load event, one batch per object
@@ -256,22 +258,47 @@ def _events_for(challenge: dict[str, Any], style: str, rng: random.Random,
 
     batches: list[list[dict]] = [[event("challenge_loaded")]]
     selected: list[str] = []
-    for obj in challenge["objects"]:
+    # ``drag`` controls how many objects get a drag sequence, which is the
+    # single biggest structural difference between this tool and the ms one:
+    # ms drags exactly one object (~14 events), this drags every object
+    # (~50 events for a 5-object challenge). Event count, drag-sequence count
+    # and total duration all move together, so leaving it uncontrolled
+    # confounds any trajectory comparison between the two tools.
+    if drag_count is not None:
+        objects = challenge["objects"][:max(1, drag_count)]
+    else:
+        objects = challenge["objects"][:1] if drag == "one" else challenge["objects"]
+    # target_ms: 전체 상호작용 시간을 고정한다. 이동점 수를 바꾸면 총시간이 따라
+    # 움직여 축이 섞이므로, 시간을 고정하려면 간격을 반대로 줄여야 한다.
+    n_moves = moves if moves is not None else (6 if style == "linear" else 22)
+    if target_ms is not None:
+        per_gap = max(4.0, target_ms / max(1, len(objects) * (n_moves + 3) + 2))
+    else:
+        per_gap = None
+    for obj in objects:
         object_id = obj["object_id"]
         hx, hy, hw, hh = obj["hit_region"]
         grab = (hx + hw / 2, hy + hh / 2)
 
         if style == "replay":
             path = _replay(grab, drop, rng, trace or [])
+        elif moves is not None:
+            path = STYLES[style](grab, drop, rng, moves)
         else:
             path = STYLES[style](grab, drop, rng)
+        if per_gap is not None:
+            path = [(x, y, per_gap) for x, y, _ in path]
 
-        batch = [event("pointer_down", object_id, grab[0], grab[1], gap=rng.uniform(120, 400)),
-                 event("drag_start", object_id, grab[0], grab[1], gap=rng.uniform(8, 20))]
+        batch = [event("pointer_down", object_id, grab[0], grab[1],
+                       gap=per_gap if per_gap is not None else rng.uniform(120, 400)),
+                 event("drag_start", object_id, grab[0], grab[1],
+                       gap=per_gap if per_gap is not None else rng.uniform(8, 20))]
         for x, y, gap in path:
             batch.append(event("pointer_move", object_id, x, y, gap=gap))
-        batch.append(event("drop", object_id, drop[0], drop[1], gap=rng.uniform(20, 60)))
-        batch.append(event("selection_add", object_id, gap=rng.uniform(5, 15)))
+        batch.append(event("drop", object_id, drop[0], drop[1],
+                           gap=per_gap if per_gap is not None else rng.uniform(20, 60)))
+        batch.append(event("selection_add", object_id,
+                           gap=per_gap if per_gap is not None else rng.uniform(5, 15)))
 
         # the server caps a batch at behavior_batch_max_events
         cap = int(challenge.get("behavior_batch_max_events") or 32)
@@ -285,7 +312,9 @@ def _events_for(challenge: dict[str, Any], style: str, rng: random.Random,
 
 def run_attempt(base: str, site_key: str, style: str, rng: random.Random,
                 trace: list[dict[str, Any]] | None, pace: float,
-                timing: str = "synthetic", select: str = "one") -> dict[str, Any]:
+                timing: str = "synthetic", select: str = "one", drag: str = "all",
+                moves: int | None = None, drag_count: int | None = None,
+                target_ms: int | None = None, tag: str = "") -> dict[str, Any]:
     """Run one full solve and return what happened.
 
     ``select`` decides what gets submitted, and it changes what the run
@@ -302,7 +331,7 @@ def run_attempt(base: str, site_key: str, style: str, rng: random.Random,
               Useful as a floor, but the empty selection is itself a signal.
     """
     headers = {"X-Captcha-Site-Key": site_key}
-    session_id = f"botprobe-{style}-{timing}-{int(time.time() * 1000)}"
+    session_id = f"botprobe-{tag or style}-{int(time.time() * 1000)}"
 
     status, challenge = _request(base, "/api/captcha/challenges", {
         "purpose": "signup", "risk_level": "high", "session_id": session_id}, headers)
@@ -315,7 +344,8 @@ def run_attempt(base: str, site_key: str, style: str, rng: random.Random,
         return {"session_id": session_id, "style": style,
                 "outcome": "no_behavior_nonce", "status": status}
 
-    batches, selected = _events_for(challenge, style, rng, trace, timing)
+    batches, selected = _events_for(challenge, style, rng, trace, timing, drag,
+                                    moves, drag_count, target_ms)
 
     previous = None
     for index, batch in enumerate(batches):
@@ -344,7 +374,7 @@ def run_attempt(base: str, site_key: str, style: str, rng: random.Random,
 
     status, result = _request(
         base, f"/api/captcha/challenges/{challenge['challenge_id']}/verify", body, headers)
-    row = {"session_id": session_id, "style": style, "timing": timing,
+    row = {"session_id": session_id, "style": style, "timing": timing, "drag": drag,
            "challenge_id": challenge["challenge_id"],
            "object_count": len(challenge["objects"]),
            "batch_count": len(batches), "verify_status": status}
@@ -390,6 +420,19 @@ def main(argv: Iterable[str] | None = None) -> int:
                         help="captcha base URL (tunnel or loopback only)")
     parser.add_argument("--style", required=True, choices=sorted(STYLES))
     parser.add_argument("--count", type=int, default=30)
+    parser.add_argument("--moves", type=int, default=None,
+                        help="pointer_move points per drag. Fixes the event-count axis.")
+    parser.add_argument("--drag-count", type=int, default=None,
+                        help="how many objects to drag. Fixes the drag-sequence axis.")
+    parser.add_argument("--target-ms", type=int, default=None,
+                        help="total interaction time. Fixes the duration axis — without it, "
+                             "changing --moves also changes duration and the axes stay tangled.")
+    parser.add_argument("--tag", default="", help="session_id prefix label for this condition")
+    parser.add_argument("--drag", choices=("all", "one"), default="all",
+                        help="how many objects get a drag sequence. 'one' matches the ms "
+                             "generator (~14 events); 'all' produces a full multi-object solve "
+                             "(~50 events). Comparing the two tools without fixing this "
+                             "confounds trajectory with interaction scale.")
     parser.add_argument("--select", choices=("all", "one", "none"), default="one",
                         help="what to submit. 'all' trips the honeypot and rarely reaches the "
                              "model; 'one' is the mode that yields ASR (see run_attempt).")
@@ -438,7 +481,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         trace = rng.choice(trace_pool) if trace_pool else None
         if index:
             time.sleep(args.rest)
-        row = run_attempt(args.base, site_key, args.style, rng, trace, args.pace, args.timing, args.select)
+        row = run_attempt(args.base, site_key, args.style, rng, trace, args.pace, args.timing, args.select, args.drag,
+                          args.moves, args.drag_count, args.target_ms, args.tag)
         rows.append(row)
         print(f"[{index + 1:>3}/{args.count}] {row['outcome']:<16} "
               f"success={row.get('success')} reason={row.get('reason')} {row['session_id']}")
