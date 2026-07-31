@@ -208,7 +208,8 @@ STYLES = {"linear": _linear, "bezier": _bezier, "replay": _replay}
 # --------------------------------------------------------------------------
 
 def _events_for(challenge: dict[str, Any], style: str, rng: random.Random,
-                trace: list[dict[str, Any]] | None) -> tuple[list[list[dict]], list[str]]:
+                trace: list[dict[str, Any]] | None,
+                timing: str = "synthetic") -> tuple[list[list[dict]], list[str]]:
     """Build the batched event stream for one solve.
 
     Batches mirror what the browser sends: the load event, one batch per object
@@ -224,8 +225,23 @@ def _events_for(challenge: dict[str, Any], style: str, rng: random.Random,
     def event(kind: str, object_id: str | None = None,
               x: float | None = None, y: float | None = None,
               gap: float = 40.0) -> dict[str, Any]:
+        """Stamp one event.
+
+        ``timing`` is the variable that matters most and is easiest to get
+        wrong.  A generator that computes ``clock += 40`` produces intervals
+        with zero variance, which the interval-statistics features flag on
+        sight — it measures "can we spot synthetic timestamps", not "can we
+        spot automation".  Real automation (Playwright, Selenium, or a plain
+        sleep loop) gets scheduler jitter for free because the timestamps come
+        from the event loop.  ``real`` sleeps and reads the wall clock so the
+        run reflects that.
+        """
         nonlocal seq, clock
-        clock += int(gap)
+        if timing == "real":
+            time.sleep(max(0.0, gap) / 1000.0)
+            clock = int(time.time() * 1000)
+        else:
+            clock += int(gap)
         # The schema enforces 0 <= x,y <= 1 and rejects the whole batch with 422
         # otherwise.  Bezier curvature plus jitter overshoots the edge on a few
         # percent of drags, so clamp once here rather than in every generator.
@@ -268,15 +284,25 @@ def _events_for(challenge: dict[str, Any], style: str, rng: random.Random,
 
 
 def run_attempt(base: str, site_key: str, style: str, rng: random.Random,
-                trace: list[dict[str, Any]] | None, pace: float) -> dict[str, Any]:
+                trace: list[dict[str, Any]] | None, pace: float,
+                timing: str = "synthetic", select: str = "one") -> dict[str, Any]:
     """Run one full solve and return what happened.
 
-    ``selected`` is every object including honeypots — a scripted attacker that
-    enumerates the object list has no way to tell them apart, and measuring how
-    often that alone blocks the attempt is part of the result.
+    ``select`` decides what gets submitted, and it changes what the run
+    measures:
+
+    ``all``   submit every object.  An enumerating attacker cannot tell a
+              honeypot from a real object, so this measures how often the
+              honeypot alone ends the attempt.  It rarely reaches the model.
+    ``one``   submit a single object.  Wrong most of the time, but the answer
+              is not what we are measuring — the behaviour model scores the
+              trajectory either way.  This is the mode that yields ASR.
+    ``none``  submit nothing.  Cannot trip the honeypot and the coordinate
+              binding has nothing to check, so it always reaches the model.
+              Useful as a floor, but the empty selection is itself a signal.
     """
     headers = {"X-Captcha-Site-Key": site_key}
-    session_id = f"botprobe-{style}-{int(time.time() * 1000)}"
+    session_id = f"botprobe-{style}-{timing}-{int(time.time() * 1000)}"
 
     status, challenge = _request(base, "/api/captcha/challenges", {
         "purpose": "signup", "risk_level": "high", "session_id": session_id}, headers)
@@ -289,7 +315,7 @@ def run_attempt(base: str, site_key: str, style: str, rng: random.Random,
         return {"session_id": session_id, "style": style,
                 "outcome": "no_behavior_nonce", "status": status}
 
-    batches, selected = _events_for(challenge, style, rng, trace)
+    batches, selected = _events_for(challenge, style, rng, trace, timing)
 
     previous = None
     for index, batch in enumerate(batches):
@@ -303,6 +329,10 @@ def run_attempt(base: str, site_key: str, style: str, rng: random.Random,
                     "batch_seq": index, "status": status, "detail": result}
         previous = result["receipt"]
 
+    if select == "one":
+        selected = [rng.choice(selected)] if selected else []
+    elif select == "none":
+        selected = []
     body: dict[str, Any] = {"selected_object_ids": selected, "session_id": session_id,
                             "duration_ms": 4200, "client_signals": {}}
     pow_spec = challenge.get("pow")
@@ -314,7 +344,7 @@ def run_attempt(base: str, site_key: str, style: str, rng: random.Random,
 
     status, result = _request(
         base, f"/api/captcha/challenges/{challenge['challenge_id']}/verify", body, headers)
-    row = {"session_id": session_id, "style": style,
+    row = {"session_id": session_id, "style": style, "timing": timing,
            "challenge_id": challenge["challenge_id"],
            "object_count": len(challenge["objects"]),
            "batch_count": len(batches), "verify_status": status}
@@ -360,6 +390,13 @@ def main(argv: Iterable[str] | None = None) -> int:
                         help="captcha base URL (tunnel or loopback only)")
     parser.add_argument("--style", required=True, choices=sorted(STYLES))
     parser.add_argument("--count", type=int, default=30)
+    parser.add_argument("--select", choices=("all", "one", "none"), default="one",
+                        help="what to submit. 'all' trips the honeypot and rarely reaches the "
+                             "model; 'one' is the mode that yields ASR (see run_attempt).")
+    parser.add_argument("--timing", choices=("synthetic", "real"), default="real",
+                        help="synthetic computes timestamps arithmetically (zero interval "
+                             "variance); real sleeps and reads the wall clock. Default real, "
+                             "because that is what an actual bot produces.")
     parser.add_argument("--seed", type=int, default=None,
                         help="fix for a reproducible run; default is time-seeded")
     parser.add_argument("--pace", type=float, default=0.2,
@@ -392,7 +429,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     rows = []
     for index in range(args.count):
         trace = rng.choice(trace_pool) if trace_pool else None
-        row = run_attempt(args.base, site_key, args.style, rng, trace, args.pace)
+        row = run_attempt(args.base, site_key, args.style, rng, trace, args.pace, args.timing, args.select)
         rows.append(row)
         print(f"[{index + 1:>3}/{args.count}] {row['outcome']:<16} "
               f"success={row.get('success')} reason={row.get('reason')} {row['session_id']}")
