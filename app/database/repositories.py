@@ -257,6 +257,12 @@ class AttemptRepository:
                     y=e.get("y"),
                     x_normalized=_clamp01(e.get("x_normalized")),
                     y_normalized=_clamp01(e.get("y_normalized")),
+                    pointer_type=e.get("pointer_type"),
+                    pressure=e.get("pressure"),
+                    buttons_mask=e.get("buttons"),
+                    is_trusted=e.get("is_trusted"),
+                    is_primary=e.get("is_primary"),
+                    coalesced_count=e.get("coalesced_count"),
                     event_metadata=(
                         {"target_role": e["target_role"]} if e.get("target_role") else None
                     ),

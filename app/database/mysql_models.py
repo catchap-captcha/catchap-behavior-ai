@@ -138,6 +138,15 @@ class PointerEvent(Base):
     x_normalized: Mapped[float | None] = mapped_column(Float, nullable=True)
     y_normalized: Mapped[float | None] = mapped_column(Float, nullable=True)
     object_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # PointerEvent 원천 신호. pointer_type / pressure / buttons_mask 는 배포 스키마에
+    # 이미 있었는데 매핑이 없어 계속 NULL 이었다. 나머지 셋은 이 신호 도입과 함께
+    # 추가한다. 전부 nullable — 미지원 브라우저의 결측과 실제 0 은 다른 값이다.
+    pointer_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    pressure: Mapped[float | None] = mapped_column(Float, nullable=True)
+    buttons_mask: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_trusted: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    is_primary: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    coalesced_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # target_role has no deployed column.
     event_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime)

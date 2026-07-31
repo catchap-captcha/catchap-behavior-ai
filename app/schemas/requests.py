@@ -50,6 +50,18 @@ class PointerEventIn(BaseModel):
     x_normalized: float | None = None
     y_normalized: float | None = None
     target_role: str | None = None
+    # PointerEvent 원천 신호. extra="forbid" 라 명시하지 않으면 요청 자체가 422 로
+    # 거부된다 — 캡차가 보내기 시작하는 순간 채점이 통째로 멈추므로 함께 열어야 한다.
+    # 전부 nullable: 미지원 브라우저는 null 이고, 결측과 실제 0 을 섞으면 안 된다.
+    is_trusted: bool | None = None
+    pointer_type: str | None = Field(default=None, max_length=16)
+    pressure: float | None = None
+    pointer_width: float | None = None
+    pointer_height: float | None = None
+    buttons: int | None = None
+    is_primary: bool | None = None
+    event_timestamp: float | None = None
+    coalesced_count: int | None = None
 
 
 class InteractionIn(BaseModel):
