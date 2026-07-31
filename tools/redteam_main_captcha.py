@@ -401,6 +401,13 @@ def main(argv: Iterable[str] | None = None) -> int:
                         help="fix for a reproducible run; default is time-seeded")
     parser.add_argument("--pace", type=float, default=0.2,
                         help="seconds between batches (default 0.2, matches the browser)")
+    parser.add_argument("--rest", type=float, default=3.0,
+                        help="seconds between attempts. Through the SSH tunnel every request "
+                             "reaches the captcha as 127.0.0.1, so a bot run shares the per-IP "
+                             "budget (30 challenges/min, 300 requests/min) with whoever is "
+                             "collecting human data at the same time. At rest=0 one run alone "
+                             "is ~353 requests/min and would 429 the humans. Default 3 leaves "
+                             "room for several people.")
     parser.add_argument("--replay-source", type=Path,
                         help="JSONL of recorded human traces, required for --style replay")
     parser.add_argument("--out", type=Path, default=Path("reports/redteam_main_captcha.jsonl"))
@@ -429,6 +436,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     rows = []
     for index in range(args.count):
         trace = rng.choice(trace_pool) if trace_pool else None
+        if index:
+            time.sleep(args.rest)
         row = run_attempt(args.base, site_key, args.style, rng, trace, args.pace, args.timing, args.select)
         rows.append(row)
         print(f"[{index + 1:>3}/{args.count}] {row['outcome']:<16} "
