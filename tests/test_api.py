@@ -547,3 +547,29 @@ def test_binding_mismatch_is_rejected_without_consuming_valid_challenge(client):
         json=_consume_payload(issued),
     )
     assert valid.status_code == 200
+
+
+def test_prediction_row_carries_the_audit_record(client, sqlite_sessionmaker):
+    """End to end: a scored attempt must leave behind enough to recompute it."""
+    from app.database.mysql_models import ModelPrediction
+
+    _load_risk_model(0.9)
+    payload = _collect_payload("att_audit_1")
+    payload.pop("collection", None)
+    resp = client.post(
+        "/api/v1/behavior/predict", json=payload, headers=_backend_headers()
+    )
+    assert resp.status_code == 200, resp.text
+
+    # The client-supplied attempt_id is mapped to an internal UUID on the way in,
+    # so look the row up by being the only one rather than by the id we sent.
+    with sqlite_sessionmaker() as s:
+        row = s.query(ModelPrediction).one()
+        meta = row.model_metadata or {}
+
+    assert meta["input_digest"], "채점한 이벤트의 지문이 없다"
+    assert meta["feature_digest"], "특징 벡터의 지문이 없다"
+    assert meta["features"], "특징 벡터가 없다"
+    assert meta["captcha"]["width"] and meta["captcha"]["height"], "챌린지 크기가 없다"
+    assert meta["event_count"] == len(payload["events"])
+    assert meta["scoring_unit"] in ("session", "per_drag")

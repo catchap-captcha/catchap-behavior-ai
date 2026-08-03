@@ -25,6 +25,7 @@ from app.schemas.requests import PredictRequest
 from app.schemas.responses import ModelNotReadyResponse, PredictResponse
 from app.services.feature_profiles import get_feature_profile
 from app.services.model_service import model_service
+from app.services.scoring_audit import build_audit
 from app.services.quality_validator import QUALITY_REJECTED, validate_attempt
 from app.services.replay_detector import compute_replay_features
 from app.services.risk_fusion import RiskFusionPolicy, fuse_behavior_risk
@@ -153,11 +154,15 @@ def predict(payload: PredictRequest, session: Session = Depends(get_session)):
         replay,
         assessment,
         settings.risk_policy_mode,
-        {
-            "scoring_unit": settings.scoring_unit,
-            "session_human_score": round(float(session_score), 6),
-            "per_drag": per_drag,
-        },
+        build_audit(
+            events=events,
+            features=features,
+            captcha_width=payload.captcha.width,
+            captcha_height=payload.captcha.height,
+            scoring_unit=settings.scoring_unit,
+            session_human_score=float(session_score),
+            per_drag=per_drag,
+        ),
     )
 
     return PredictResponse(
