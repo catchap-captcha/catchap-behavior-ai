@@ -145,6 +145,68 @@ class ModelService:
             "feature_schema_version": bundle["feature_schema_version"],
         }
 
+    def score_per_drag(
+        self,
+        events: list[dict[str, Any]],
+        extractor: Any,
+        interaction: dict[str, Any] | None,
+        threshold: float,
+    ) -> dict[str, Any] | None:
+        """Score each drag on its own and decide on the median.
+
+        Returns None when the trajectory has no usable drag, so the caller can
+        fall back to the session score rather than invent a verdict.
+
+        The median, not the minimum: on the main-captcha data the minimum rejects
+        52.2% of humans at the session threshold because one unlucky drag sinks the
+        whole session, while the median rejects 1.5% and still blocks every bot.
+        """
+        from app.services.drag_segmentation import MIN_MOVES_PER_DRAG, move_count, split_drags
+
+        drags = split_drags(events)
+        if not drags:
+            return None
+
+        # A drag too short to have a path carries no trajectory evidence, so it is
+        # left out of the median rather than scored 0. Scoring it 0 costs real
+        # users: 15 of 166 human sessions contain one such drag among several,
+        # and forcing them to 0 moved human FRR from 1.5% to 5.2%.
+        #
+        # What separates a teleport is that *every* drag is starved — 5 of 5 in
+        # the teleport family, 0 of 166 humans. So the floor applies to the
+        # session, not to each drag.
+        scores: list[float] = []
+        starved = 0
+        for drag in drags:
+            if move_count(drag) < MIN_MOVES_PER_DRAG:
+                starved += 1
+                continue
+            scores.append(float(self.score(extractor(drag, interaction))["human_score"]))
+
+        if not scores:
+            return {
+                "human_score": 0.0,
+                "drag_count": len(drags),
+                "drag_scores": [],
+                "starved_drags": starved,
+                "prediction": "bot",
+                "threshold": threshold,
+                "reason": "every_drag_below_move_floor",
+            }
+
+        ordered = sorted(scores)
+        mid = len(ordered) // 2
+        median = ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2
+
+        return {
+            "human_score": round(median, 6),
+            "drag_count": len(drags),
+            "drag_scores": [round(s, 6) for s in scores],
+            "starved_drags": starved,
+            "prediction": "human" if median >= threshold else "bot",
+            "threshold": threshold,
+        }
+
     @staticmethod
     def _positive_proba(model: Any, vector: np.ndarray) -> float:
         """Return P(class == 1 == human) robustly across sklearn-style models."""

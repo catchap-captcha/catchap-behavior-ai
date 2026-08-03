@@ -82,11 +82,31 @@ def predict(payload: PredictRequest, session: Session = Depends(get_session)):
     )
     features = profile.extractor(events, payload.interaction.model_dump())
     result = model_service.score(features)
+    session_score = result["human_score"]
+
+    # Score per drag as well, always. The two numbers disagree in exactly the
+    # cases that matter — a straight path repeated five times scores 1.0000 as a
+    # session and ~0.006 per drag — so recording both is what lets us flip the
+    # unit later on evidence instead of on argument.
+    settings = get_settings()
+    per_drag = model_service.score_per_drag(
+        events,
+        profile.extractor,
+        payload.interaction.model_dump(),
+        settings.per_drag_threshold,
+    )
+    if settings.scoring_unit == "per_drag" and per_drag is not None:
+        # Keep the session score in the record; only the decision moves.
+        result = {**result, "session_human_score": result["human_score"],
+                  "human_score": per_drag["human_score"],
+                  "bot_risk_score": round(1.0 - per_drag["human_score"], 6),
+                  "threshold": per_drag["threshold"],
+                  "bot_decision": "low_risk" if per_drag["prediction"] == "human" else "high_risk",
+                  "prediction": per_drag["prediction"]}
 
     # Compare only with recent attempts from this trusted backend session. A
     # browser never calls this route, so session_id is backend-derived rather
     # than an untrusted client claim.
-    settings = get_settings()
     now = _utcnow()
     attempts = AttemptRepository(session)
     try:
@@ -133,6 +153,11 @@ def predict(payload: PredictRequest, session: Session = Depends(get_session)):
         replay,
         assessment,
         settings.risk_policy_mode,
+        {
+            "scoring_unit": settings.scoring_unit,
+            "session_human_score": round(float(session_score), 6),
+            "per_drag": per_drag,
+        },
     )
 
     return PredictResponse(
@@ -165,6 +190,7 @@ def _persist(
     replay,
     assessment,
     policy_mode: str,
+    scoring_detail: dict | None = None,
 ) -> None:
     """Store the inference attempt. Failure here never breaks the response."""
     try:
@@ -213,6 +239,7 @@ def _persist(
             policy_mode=policy_mode,
             risk_reasons=list(assessment.reasons),
             threshold=result["threshold"],
+            scoring_detail=scoring_detail,
             model_name=result["model_name"],
             model_version=result["model_version"],
             feature_schema_version=result["feature_schema_version"],

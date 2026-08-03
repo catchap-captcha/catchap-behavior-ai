@@ -43,6 +43,25 @@ class Settings(BaseSettings):
     production_model_dir: str = "models/production"
     default_threshold: float = 0.55
 
+    # --- Scoring unit ---
+    # "session" scores the whole trajectory at once, which is what the model was
+    # trained and calibrated on. "per_drag" scores each press-to-release and takes
+    # the median, which removes the interaction-scale lever: session aggregates
+    # grow with the number of drags, so a ruler-straight path passed by being
+    # repeated (measured 2026-07-31).
+    #
+    # On main-captcha data (411 attempts we can reproduce production scores for):
+    #   session,  threshold 0.99995   human FRR 16.4%   bot ASR 14.2%
+    #   session,  threshold 0.05      human FRR  1.5%   bot ASR 45.8%
+    #   per_drag, threshold 0.01      human FRR  1.5%   bot ASR  0.0%
+    #
+    # Default stays "session": that number was chosen on the same data it is
+    # measured on, so it is a candidate until a sealed holdout scores it. Both
+    # scores are recorded either way, so flipping this is a config change with
+    # evidence behind it rather than a leap.
+    scoring_unit: str = "session"
+    per_drag_threshold: float = 0.01
+
     # --- Advisory risk policy ---
     # These are policy weights, not calibrated probabilities. The backend uses
     # the returned action to step up verification; it remains the decision maker.

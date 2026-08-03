@@ -398,6 +398,7 @@ class PredictionRepository:
         policy_mode: str,
         risk_reasons: list[str],
         threshold: float,
+        scoring_detail: dict | None = None,
         model_name: str,
         model_version: str,
         feature_schema_version: str,
@@ -422,7 +423,12 @@ class PredictionRepository:
             risk_reasons=list(risk_reasons),
             inference_latency_ms=inference_latency_ms,
             # policy_mode has no deployed column (20260723 migration not applied).
-            model_metadata={"policy_mode": policy_mode, "bot_decision": bot_decision},
+            # The row records the score but not what produced it, so a recorded
+            # score cannot be reproduced later — 18% of a 499-row replay did not
+            # match and the cause is still unknown. Keeping the scoring unit and
+            # the per-drag breakdown here is the cheapest part of closing that.
+            model_metadata={"policy_mode": policy_mode, "bot_decision": bot_decision,
+                            **(scoring_detail or {})},
             predicted_at=_utcnow(),
         )
         self.session.add(row)
