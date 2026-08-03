@@ -26,6 +26,10 @@ data/metadata/*
 
 # Models — trained artifacts are not committed
 models/candidate/*
+# The model the production container bakes in must be reproducible from the
+# repo — infra builds the image from this branch, so an ignored .joblib means
+# there is no way to prove the image matches what is running.
+!models/candidate/revalidation_two_view_participant_safe_20260722/
 models/production/*
 !models/**/.gitkeep
 
