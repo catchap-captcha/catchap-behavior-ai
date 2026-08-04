@@ -1,0 +1,14 @@
+{
+  "training_usage": "external_holdout_only",
+  "source_role": "human_holdout_prevtest",
+  "lockbox_manifest": "data/interim/human_holdout_prevtest_h2219_20260804/manifest.json",
+  "evaluation_consumed": {
+    "model_path": "models/candidate/revalidation_two_view_participant_safe_20260722/two_view_fusion.joblib",
+    "report_path": "docs/RESULT_TASK_THREE_20260804.md",
+    "scored_at_utc": "2026-08-04T00:00:00+00:00",
+    "result": {
+      "human_frr": 0.0068,
+      "worst_participant_frr": 0.0217
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "kind": "human_holdout_from_previous_test_participants",
+  "training_usage": "external_holdout_only",
+  "source_role": "previous_test_participants_never_used_by_current_candidate",
+  "verification": {
+    "overlap_with_development_participants": 0,
+    "overlap_with_prior_lockbox_participants": 0,
+    "development_participants": 30,
+    "threshold_calibration_human_rows": 14913,
+    "note": "development 15802 - anonymous 889 = 14913, so calibration used development only"
+  },
+  "limitations": [
+    "legacy EDU capture surface, not the main captcha the model is deployed on",
+    "these participants served as the test split in an earlier round, so they are unused for this candidate but not pristine"
+  ],
+  "files": {
+    "human_holdout.jsonl": {
+      "rows": 2219,
+      "sha256": "8d02030c71380136d33a704f163f44faca3585ec534940b2f2b632bf0701834c"
+    }
+  },
+  "counts": {
+    "rows": 2219,
+    "participants": 7
+  }
+}
