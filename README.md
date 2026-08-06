@@ -1,6 +1,8 @@
-# catchap ai-service
+# catchap-behavior-ai
 
-웹 **드래그 CAPTCHA**의 Human/Bot **행동 분석** 서비스입니다. 마우스/터치 포인터
+웹 **드래그 CAPTCHA**의 Human/Bot **행동 분석** 서비스입니다.
+(2026-08-06 저장소 이름이 `ai-service` 에서 `catchap-behavior-ai` 로 바뀌었습니다.)
+ 마우스/터치 포인터
 드래그 궤적을 받아 행동 Feature를 계산하고, 데이터가 충분히 쌓이면 모델을 학습해
 "사람인지 봇인지"를 판정합니다.
 
@@ -14,7 +16,7 @@
 |------|------|
 | **다른 팀** | CAPTCHA 화면(프론트) + CAPTCHA 백엔드 개발 |
 | **DB 팀** | MySQL 8.0 **생성·운영** ( `db/schema_mysql.sql` 적용) |
-| **우리(ai-service)** | 행동 데이터 수집 API·전처리·Feature·학습·검증·추론 API |
+| **우리(catchap-behavior-ai)** | 행동 데이터 수집 API·전처리·Feature·학습·검증·추론 API |
 
 ## 프로젝트 구조
 
@@ -98,4 +100,44 @@ python -m training.generate_gan_bots             # human-like bot 생성
 
 ```bash
 pytest -q      # DB는 인메모리 SQLite 사용, MySQL 불필요
+```
+
+---
+
+## 캡차와는 HTTP 로만 만납니다
+
+```
+[캡차 앱]  catchap-captcha 의 app/behavior_client.py
+    ↓  POST /api/v1/behavior/predict   ·   GET /health
+[행동 AI]  ★이 저장소
+```
+
+★**코드를 공유하지 않습니다.** `import` 하나 없이 주소만 부르므로 저장소가 갈라져도
+문제가 없습니다. **부르는 쪽 코드(브릿지)는 캡차 저장소에 있습니다** — 캡차가 자기 요청을
+만들고 응답을 해석하는 부분이기 때문입니다.
+
+★지금 **`policy_mode: shadow`** 로 돌고 있습니다. **판정에 쓰지 않고 기록만** 합니다.
+그래서 이 서비스가 멈춰도 캡차는 계속 동작하고, **멈추는 것은 행동 데이터 수집**뿐입니다.
+
+## 작업 방법
+
+`main` 에 직접 push 하지 않습니다. 브랜치를 따서 PR 로 올립니다.
+
+```bash
+git switch main && git pull
+git switch -c feature/<요약>
+git push -u origin HEAD
+gh pr create --fill && gh pr merge --auto --squash
+```
+
+★리뷰 승인은 **0명**입니다. 본인이 열고 본인이 병합할 수 있습니다.
+자세한 것은 `catchap-infra` 의 `문서/91-팀공유/06-작업방법-커밋-푸시-PR.md` 를 보세요.
+
+## 함께 보는 저장소
+
+```
+catchap-captcha    캡차 — 이 서비스를 부르는 쪽
+catchap-backend    백엔드 API
+catchap-infra      쿠버네티스 매니페스트 (k8s/behavior-ai/) · 인프라 문서
+catchap-legacy     지난 작업 보관 (읽기용)
 ```
