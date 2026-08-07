@@ -1,0 +1,35 @@
+# 시험만 돌리는 데 필요한 것 — CI 전용
+#
+# ★왜 requirements.txt 를 그대로 안 쓰나
+#   requirements.txt 에 ★torch(2GB+)가 있는데, 그것은 GAN 학습 단계에서만 쓴다
+#   (training/train_gan.py 안에서 지연 import). ★시험은 torch 를 한 번도 부르지 않는다.
+#   anthropic·matplotlib 도 마찬가지로 시험 경로에 없다.
+#   실측(2026-08-07): 아래 목록만으로 tests/ 가 ★231 passed · 1 skipped · 10.93초.
+#
+# ⚠️★xgboost·lightgbm 은 ★빼면 안 된다.
+#   tests/ 가 직접 부르지는 않는데, tools/ 를 거쳐 ★수집(collect) 단계에서 import 된다.
+#   없으면 시험이 "건너뜀"이 아니라 ★3개 파일이 오류로 죽는다
+#   (test_formal_lockbox_guard · test_redteam_weakness_analysis · test_redteam_weakness_miner).
+#   conftest 의 "라이브러리 없으면 자동 skip" 은 ★실행 단계 이야기지 수집 단계가 아니다.
+#
+# ⚠️여기와 requirements.txt 의 판본 범위는 ★같게 유지할 것.
+#   시험은 통과하는데 실서비스가 다른 판본으로 도는 상황을 만들지 않기 위해서다.
+
+fastapi>=0.111,<1.0
+pydantic>=2.7,<3.0
+pydantic-settings>=2.3,<3.0
+SQLAlchemy>=2.0,<3.0
+PyMySQL>=1.1,<2.0
+cryptography>=42
+pandas>=2.2,<3.0
+numpy>=1.26,<3.0
+scikit-learn>=1.5,<2.0
+joblib>=1.4,<2.0
+
+# ★수집 단계에서 필요 (위 주석 참고)
+xgboost>=2.0,<3.0
+lightgbm>=4.3,<5.0
+
+# 시험 도구
+pytest>=8.2,<9.0
+httpx>=0.27,<1.0
