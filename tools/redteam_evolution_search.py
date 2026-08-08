@@ -89,6 +89,44 @@ def mutate(policy: MotionPolicy, rng: random.Random, scale: float) -> MotionPoli
     )
 
 
+MAIN_CAPTCHA = Path("data/interim/collection_20260806.jsonl")
+SEALED_PEOPLE = {"sw", "ms"}
+
+
+def load_main_captcha_bases(limit: int) -> list[dict]:
+    """Substrate shaped like the surface we deploy on.
+
+    Warping legacy traces produces ~107-event drags against a surface whose real
+    drags are ~12, and `event_count` alone then separates them with AUC 1.000.
+    That flatters the defence for a reason no attacker would concede. Sealed
+    people are excluded — warping their traces would leak them into anything
+    fitted against this red team.
+    """
+    out = []
+    with MAIN_CAPTCHA.open() as f:
+        for line in f:
+            record = json.loads(line)
+            code = record.get("participant_id") or ""
+            if code.split("-")[0] in SEALED_PEOPLE:
+                continue
+            if record.get("quality_status") != "valid":
+                continue
+            rows = record.get("events") or []
+            events = [{
+                "seq": r.get("seq"), "event_type": r.get("event_type"),
+                "t_ms": float(r.get("client_timestamp_ms") or 0),
+                "x": float(r["x_pixel"]), "y": float(r["y_pixel"]),
+                "x_normalized": r.get("x_normalized"), "y_normalized": r.get("y_normalized"),
+            } for r in rows if r.get("x_pixel") is not None]
+            if len(events) >= 8:
+                out.append({"events": events,
+                            "captcha": {"width": record.get("stage_width") or 500,
+                                        "height": record.get("stage_height") or 375}})
+            if len(out) >= limit:
+                break
+    return out
+
+
 def load_bases(limit: int) -> list[dict]:
     """Real human traces are the substrate the sweep warps; keep that identical."""
     out = []
@@ -146,6 +184,8 @@ def main() -> None:
     ap.add_argument("--per-policy", type=int, default=12)
     ap.add_argument("--elite", type=int, default=8)
     ap.add_argument("--seed", type=int, default=20260804)
+    ap.add_argument("--surface", choices=("legacy","main"), default="legacy",
+                    help="공격 기반 궤적. main = 실제 배포 표면")
     ap.add_argument("--normalized", action="store_true",
                     help="model was trained on 0..1 coordinates rather than pixels")
     args = ap.parse_args()
@@ -154,7 +194,7 @@ def main() -> None:
     threshold = float(bundle["threshold"])
     score = scorer(bundle)
     rng = random.Random(args.seed)
-    bases = load_bases(400)
+    bases = load_main_captcha_bases(300) if args.surface == "main" else load_bases(400)
 
     population = [random_policy(rng) for _ in range(args.population)]
     print(f"모델 {Path(args.model).parent.name} · 임계 {threshold:.7f}")
