@@ -12,6 +12,8 @@ from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.secrets_loader import load_secrets_into_env
+
 
 class Settings(BaseSettings):
     """Environment-backed settings. See `.env.example` for the full list."""
@@ -103,4 +105,8 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     """Cached settings accessor (one instance per process)."""
+    # ★Settings 를 만들기 전에 Secrets Manager 를 읽어 환경변수로 넣는다.
+    # 비밀값이 Settings 의 재료라 순서가 반대면 의미가 없다.
+    # SECRETS_BACKEND 기본값이 none 이라 로컬 개발·시험에서는 아무 일도 일어나지 않는다.
+    load_secrets_into_env()
     return Settings()
