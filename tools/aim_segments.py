@@ -36,6 +36,33 @@ import numpy as np
 GAP_MS = 400.0
 MIN_POINTS = 8
 
+# A second segmentation, for a different question.
+#
+# `GAP_MS = 400` isolates one aiming *motion*, which is the right unit for
+# per-trace features: `peak_at`, `slow_fraction` and the rest describe a single
+# reach and are meaningless across a pause.
+#
+# Trajectory fingerprinting needs the opposite — a long *shape*. Measured
+# against a warping attacker (low-frequency deformation, endpoints pinned, the
+# attack that evades everything else), detection depends almost entirely on how
+# many points the track carries:
+#
+#     8~12 points    warp 0.02 caught  1.4%
+#     13~18                            3.8%
+#     19~30                           50.8%
+#     31+                             96.8%
+#
+# Splitting at 400ms produced only 56 tracks of 31+ points out of 600. Splitting
+# at 2000ms produces 111, and detection goes *up* rather than down (100.0% at
+# warp 0.02). Both were worth checking because the opposite extreme fails badly:
+# not splitting at all gives a 23-point median but only 6.8% detection, since
+# idle parking blurs the shape it is supposed to preserve.
+#
+# So the useful unit is "moved without stopping for two seconds", not "one reach"
+# and not "everything in the challenge".
+FINGERPRINT_GAP_MS = 2000.0
+FINGERPRINT_MIN_POINTS = 31
+
 # The capture is throttled at 40ms in the widget (`main.jsx:268`). Anything a bot
 # emits below this could never have come through the same path, so a bot that
 # ignores it is not being tested against the real surface — it is being handed a
@@ -96,6 +123,41 @@ def load_bursts(path: Path, exclude_probe: bool = True) -> list[list[dict]]:
                     current.append(nxt)
             bursts.append(current)
     return [b for b in bursts if len(b) >= MIN_POINTS]
+
+
+def _split(events: list[dict], gap_ms: float) -> list[list[dict]]:
+    current, out = [events[0]], []
+    for prev, nxt in zip(events, events[1:]):
+        if nxt["timestamp_ms"] - prev["timestamp_ms"] > gap_ms:
+            out.append(current)
+            current = [nxt]
+        else:
+            current.append(nxt)
+    out.append(current)
+    return out
+
+
+def fingerprint_tracks(path: Path, exclude_probe: bool = True) -> list[list[dict]]:
+    """Tracks long enough for the fingerprint axis to mean anything.
+
+    Only 22.7% of recorded aiming clears the bar, because people simply do not
+    move continuously for that long on this surface. The remaining 77% is not
+    a failure of segmentation — it is the task not asking for enough motion, and
+    no amount of reprocessing will conjure it.
+
+    Callers must treat "too short to judge" as different from "judged and found
+    innocent". A short track is outside this axis's competence, not cleared by it.
+    """
+    out: list[list[dict]] = []
+    with path.open() as f:
+        for line in f:
+            record = json.loads(line)
+            if exclude_probe and str(record.get("participant_id", "")).startswith("zzprobe"):
+                continue
+            events = record.get("aim_events") or []
+            if events:
+                out.extend(_split(events, FINGERPRINT_GAP_MS))
+    return [t for t in out if len(t) >= FINGERPRINT_MIN_POINTS]
 
 
 def to_arrays(burst: list[dict]) -> tuple[np.ndarray, np.ndarray]:

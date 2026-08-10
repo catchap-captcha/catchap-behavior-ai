@@ -112,6 +112,19 @@ class DynamicTimeWarpingComparator:
         return relative / total_length
 
 
+# Below this, a Procrustes score cannot separate a warped replay from an
+# ordinary hand — measured on real aiming tracks, detection of a 0.02 warp runs
+# 1.4% at 8~12 points against 96.8% at 31+. Use it to qualify a claim, not to
+# gate scoring: deployed drags sit at ~12 points and the rotated-replay signal
+# there is real and worth keeping.
+MIN_POINTS_FOR_WARP_RESISTANCE = 31
+
+
+def survives_warping(path: np.ndarray) -> bool:
+    """Whether a similarity verdict on this path may be called warp-resistant."""
+    return _clean_path(path).shape[0] >= MIN_POINTS_FOR_WARP_RESISTANCE
+
+
 class ProcrustesPathComparator:
     """Compare path shape after removing translation, scale **and rotation**.
 
@@ -142,6 +155,28 @@ class ProcrustesPathComparator:
     centroid, scale to unit Frobenius norm, then take the optimal rotation from
     the SVD of the cross-covariance. What is left is the residual no rigid
     motion can remove.
+
+    What this does NOT survive
+    --------------------------
+    Only *rigid* motion is quotiented out. An attacker who bends the path —
+    a smooth low-frequency deformation with the endpoints pinned, which is what
+    reusing a captured trace against a new target actually permits — pushes the
+    residual up and escapes.
+
+    How well they escape depends almost entirely on path length, because a short
+    path cannot distinguish the attacker's deformation from a hand's own wobble:
+
+        8~12 points    caught  1.4%      19~30   caught 50.8%
+        13~18                  3.8%      31+            96.8%
+
+    Deployed drags carry ~12 points, so **on the drag surface this comparator
+    should be credited with catching rotated replays and nothing more.** That is
+    still worth having (0.2% -> 82.6% at an unchanged false-pair rate), but it is
+    not warp resistance, and `MIN_POINTS_FOR_WARP_RESISTANCE` exists so the claim
+    can be checked rather than assumed.
+
+    No minimum is enforced here on purpose. Refusing to score short paths would
+    disable the rotated-replay signal on the only surface currently deployed.
     """
 
     def __init__(self, n_points: int = 32, sharpness: float = 4.0) -> None:
@@ -363,7 +398,9 @@ __all__ = [
     "HistoricalAttempt",
     "NormalizedPathComparator",
     "PathComparator",
+    "MIN_POINTS_FOR_WARP_RESISTANCE",
     "ProcrustesPathComparator",
+    "survives_warping",
     "ReplayFeatures",
     "compute_replay_features",
     "path_from_events",
