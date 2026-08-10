@@ -174,3 +174,43 @@ def test_rotated_replay_scores_above_the_deployed_threshold():
         events, duration_ms=700.0, now_epoch_s=1001.0, history=history)
     assert features.path_similarity_score >= threshold
     assert not features.exact_replay_detected  # rotation changes the hash
+
+
+def test_joined_path_gates_on_length_and_drops_the_seam_duplicate():
+    """The aim/drag join must not manufacture a zero-length step at the seam.
+
+    `pointerdown` fires where the pointer already is, so the last aim sample and
+    the first drag sample can coincide. Left in, that step has undefined
+    direction and step length — the two quantities the fingerprint rests on.
+    """
+    from tools.aim_drag_path import MIN_POINTS_FOR_FINGERPRINT, join
+
+    aim = [{"x": i / 40.0, "y": 0.1 * i} for i in range(20)]
+    drag = [{"x": aim[-1]["x"], "y": aim[-1]["y"]}] + [
+        {"x": 0.5 + i / 40.0, "y": 2.0 + 0.1 * i} for i in range(15)]
+
+    joined = join(aim, drag)
+    assert joined.aim_points == 20
+    steps = np.linalg.norm(np.diff(joined.points, axis=0), axis=1)
+    assert steps.min() > 0.0             # seam duplicate removed
+    # drag carried 16 samples, one of them coinciding with the last aim sample.
+    assert joined.drag_points == 15      # counted after the seam is dropped
+    assert joined.total_points == 35
+
+    assert joined.judgeable()
+    # A drag on its own is exactly the case that cannot be judged: ~12 points,
+    # where warped replays are caught 1.4% of the time.
+    assert not join([], drag).judgeable()
+    assert MIN_POINTS_FOR_FINGERPRINT == 31
+
+
+def test_joined_path_survives_missing_halves():
+    from tools.aim_drag_path import join
+
+    drag = [{"x": i / 20.0, "y": 0.0} for i in range(12)]
+    assert join([], drag).total_points == 12
+    assert join(drag, []).total_points == 12
+    assert join([], []).total_points == 0
+    assert not join([], []).judgeable()
+    # Rows where the widget recorded no coordinates must not crash the join.
+    assert join([{"x": None, "y": None}], drag).total_points == 12
