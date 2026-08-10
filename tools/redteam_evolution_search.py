@@ -93,7 +93,7 @@ MAIN_CAPTCHA = Path("data/interim/collection_20260806.jsonl")
 SEALED_PEOPLE = {"sw", "ms"}
 
 
-def load_main_captcha_bases(limit: int) -> list[dict]:
+def load_main_captcha_bases(limit: int, only: set[str] | None = None) -> list[dict]:
     """Substrate shaped like the surface we deploy on.
 
     Warping legacy traces produces ~107-event drags against a surface whose real
@@ -107,7 +107,10 @@ def load_main_captcha_bases(limit: int) -> list[dict]:
         for line in f:
             record = json.loads(line)
             code = record.get("participant_id") or ""
-            if code.split("-")[0] in SEALED_PEOPLE:
+            person = code.split("-")[0]
+            if person in SEALED_PEOPLE:
+                continue
+            if only and person not in only:
                 continue
             if record.get("quality_status") != "valid":
                 continue
@@ -184,6 +187,10 @@ def main() -> None:
     ap.add_argument("--per-policy", type=int, default=12)
     ap.add_argument("--elite", type=int, default=8)
     ap.add_argument("--seed", type=int, default=20260804)
+    ap.add_argument("--dump-elites", type=Path,
+                    help="마지막 세대의 엘리트 정책을 저장한다 (합산 판정 분석용)")
+    ap.add_argument("--only-person", nargs="*", default=[],
+                    help="이 사람 궤적만 공격 기반으로 쓴다")
     ap.add_argument("--surface", choices=("legacy","main"), default="legacy",
                     help="공격 기반 궤적. main = 실제 배포 표면")
     ap.add_argument("--normalized", action="store_true",
@@ -194,7 +201,8 @@ def main() -> None:
     threshold = float(bundle["threshold"])
     score = scorer(bundle)
     rng = random.Random(args.seed)
-    bases = load_main_captcha_bases(300) if args.surface == "main" else load_bases(400)
+    bases = (load_main_captcha_bases(300, set(args.only_person)) if args.surface == "main"
+             else load_bases(400))
 
     population = [random_policy(rng) for _ in range(args.population)]
     print(f"모델 {Path(args.model).parent.name} · 임계 {threshold:.7f}")
@@ -227,6 +235,22 @@ def main() -> None:
 
     print(f"\n  최고 점수 {best_overall:.6f} · 임계 {threshold:.7f} "
           f"→ {'회피 성공' if best_overall >= threshold else '회피 실패'}")
+
+    if args.dump_elites:
+        # The converged policies ARE the attacker. Re-deriving them with a short
+        # search gives a much weaker adversary — a 2-generation best policy sat
+        # below the threshold while the 30-generation run evaded 73.7%.
+        args.dump_elites.parent.mkdir(parents=True, exist_ok=True)
+        args.dump_elites.write_text(json.dumps({
+            "model": args.model,
+            "threshold": threshold,
+            "generations": args.generations,
+            "seed": args.seed,
+            "surface": args.surface,
+            "elites": [{k: list(v) if isinstance(v, tuple) else v
+                        for k, v in vars(p).items()} for p in elite],
+        }, ensure_ascii=False, indent=1) + "\n")
+        print(f"  엘리트 정책 {len(elite)}개 -> {args.dump_elites}")
 
 
 if __name__ == "__main__":

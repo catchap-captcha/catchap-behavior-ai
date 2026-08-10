@@ -71,6 +71,7 @@ CANDIDATES = [
     ("surface_aware_20260806", "pixel"),
     ("drag_unit_20260806", "pixel"),
     ("drag_unit_frr5_20260806", "pixel"),
+    ("scale_aug_20260806", "pixel"),
 ]
 
 

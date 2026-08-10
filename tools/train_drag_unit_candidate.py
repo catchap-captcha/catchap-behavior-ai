@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import random
 import statistics
 import sys
 from collections import defaultdict
@@ -67,7 +68,7 @@ BOT_SOURCES = [
     # (~340 events/session vs ~12 for a real drag), so `event_count` separates
     # them with AUC 1.000 and the detector never learns the hard signals —
     # pause_count is human median 3, generated 0, and it already ships unused.
-    "data/interim/main_captcha_bots_development_20260806.jsonl",
+    "data/interim/main_captcha_bots_nop5_20260806.jsonl",
     "data/interim/extended_bots_10000_20260721.jsonl",
     "data/interim/rule_bots_3000.jsonl",
     "data/interim/adversarial_replay_broad_development_3000_20260721.jsonl",
@@ -89,6 +90,27 @@ def sha256(path: Path) -> str:
 
 def drags_of(events: list[dict]) -> list[list[dict]]:
     return [d for d in split_drags(events) if move_count(d) >= MIN_MOVES_PER_DRAG]
+
+
+# Observed captcha stage widths, from ai_behavior_attempts: 500 dominates but
+# 333/375/640/1024 all occur. Sampling from these is not data augmentation for
+# its own sake — it is how the scale-dependent features get taken away.
+STAGE_WIDTHS = (333.0, 375.0, 500.0, 500.0, 500.0, 640.0, 1024.0)
+
+
+def rescale(drag: list[dict], factor: float) -> list[dict]:
+    """Same gesture, different stage. Absolute-magnitude features move, shape
+    and timing features do not.
+
+    Why this is the whole experiment: `scale_pixel` — the only candidate that
+    clears every gate — leans on turn_angle_mean, micro_move_ratio, interval_cv,
+    turn_direction_change_ratio and pause_count. The deployed model leans on
+    total_distance, y_deviation and normalized_speed_p10. Those are absolute
+    magnitudes, and an attacker changes them by resizing the window. Training
+    across stage sizes makes them unlearnable, which forces the model onto the
+    shape and rhythm features `scale_pixel` actually uses.
+    """
+    return [dict(e, x=float(e["x"]) * factor, y=float(e["y"]) * factor) for e in drag]
 
 
 def legacy_events(record: dict) -> list[dict]:
@@ -115,8 +137,12 @@ def collection_events(record: dict) -> list[dict]:
     return out
 
 
-def load_sessions(limit_legacy: int | None) -> list[dict]:
+def load_sessions(limit_legacy: int | None, augment: int = 0, seed: int = 0,
+                  exclude: set[str] | None = None,
+                  exclude_family: str | None = None) -> list[dict]:
     """One entry per session: label, group, and its drags' feature vectors."""
+    rng = random.Random(seed)
+    exclude = exclude or set()
     sealed = set(json.loads(SPLIT.read_text())["holdout_people"])
     training = set(json.loads(SPLIT.read_text())["training_people"])
     print(f"봉인 {sorted(sealed)} 제외 · 수집 학습 {sorted(training)}")
@@ -135,7 +161,7 @@ def load_sessions(limit_legacy: int | None) -> list[dict]:
             participant = record.get("anonymous_participant_id") or "legacy_unknown"
             sessions.append({
                 "label": "human", "group": f"human::{participant}", "source": "legacy",
-                "drags": [extract_features(d, None) for d in ds],
+                "drags": featurise(ds, augment, rng),
             })
             kept += 1
     print(f"  레거시 사람 {kept}세션")
@@ -147,8 +173,11 @@ def load_sessions(limit_legacy: int | None) -> list[dict]:
                 record = json.loads(line)
                 code = record.get("participant_id") or ""
                 person = person_of(code)
-                if person in sealed:
-                    continue                      # sealed: refused, never scored
+                if person in sealed or person in exclude:
+                    # sealed: refused, never scored. exclude: held out so the
+                    # operating point and the attack substrate can both be
+                    # fitted on someone this model has never seen.
+                    continue
                 if person not in training:
                     continue
                 if record.get("quality_status") != "valid":
@@ -158,13 +187,19 @@ def load_sessions(limit_legacy: int | None) -> list[dict]:
                     continue
                 sessions.append({
                     "label": "human", "group": f"human::{person}", "source": "collection",
-                    "drags": [extract_features(d, None) for d in ds],
+                    "drags": featurise(ds, augment, rng),
                 })
                 added += 1
         print(f"  수집 사람 {added}세션 (메인 캡차 표면)")
 
     for name in BOT_SOURCES:
         path = Path(name)
+        if exclude_family and exclude_family in path.name:
+            # leave-one-family-out: the written criterion for "미지 Bot 최악 ASR"
+            # (SECURITY_ACCEPTANCE_CRITERIA.md:29). A seed split inside one
+            # generator does not count — §3.1 says so explicitly.
+            print(f"  [LOFO] 학습 제외 {path.name}")
+            continue
         low = path.name.lower()
         if any(bad in low for bad in FORBIDDEN):
             raise SystemExit(f"학습 금지 파일이 목록에 있다: {path.name}")
@@ -189,12 +224,23 @@ def load_sessions(limit_legacy: int | None) -> list[dict]:
                 generator = collection.get("generator_version") or "unknown"
                 sessions.append({
                     "label": "bot", "group": f"bot::{family}::{generator}", "source": path.name,
-                    "drags": [extract_features(d, None) for d in ds],
+                    "drags": featurise(ds, augment, rng),
                 })
                 added += 1
         print(f"  봇 {added}세션  {path.name}")
 
     return sessions
+
+
+def featurise(drags: list[list[dict]], augment: int, rng: random.Random) -> list[dict]:
+    """One feature row per drag, plus `augment` copies of the session at other
+    stage sizes. Copies stay inside the same session so they never split across
+    a CV fold — an augmented twin on the other side would be leakage."""
+    rows = [extract_features(d, None) for d in drags]
+    for _ in range(augment):
+        factor = rng.choice(STAGE_WIDTHS) / 500.0
+        rows.extend(extract_features(rescale(d, factor), None) for d in drags)
+    return rows
 
 
 def matrices(sessions: list[dict], view: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -283,9 +329,15 @@ def main() -> int:
     ap.add_argument("--max-human-frr", type=float, default=0.01)
     ap.add_argument("--seed", type=int, default=20260806)
     ap.add_argument("--limit-legacy", type=int)
+    ap.add_argument("--exclude-family", help="이 봇 파일을 학습에서 뺀다 (leave-one-family-out)")
+    ap.add_argument("--exclude-person", nargs="*", default=[],
+                    help="이 사람을 학습에서 뺀다 (정직한 미지 평가용)")
+    ap.add_argument("--scale-augment", type=int, default=0,
+                    help="세션마다 다른 스테이지 크기 사본을 N개 추가한다")
     args = ap.parse_args()
 
-    sessions = load_sessions(args.limit_legacy)
+    sessions = load_sessions(args.limit_legacy, args.scale_augment, args.seed,
+                             set(args.exclude_person), args.exclude_family)
     humans = sum(1 for s in sessions if s["label"] == "human")
     drags = sum(len(s["drags"]) for s in sessions)
     groups = len({s["group"] for s in sessions})

@@ -38,14 +38,14 @@ COLLECTION = Path("data/interim/collection_20260806.jsonl")
 SPLIT = Path("data/metadata/collection_split_20260806.json")
 
 
-def bases() -> list[dict]:
+def bases(exclude: set[str]) -> list[dict]:
     sealed = set(json.loads(SPLIT.read_text())["holdout_people"])
     out = []
     with COLLECTION.open() as f:
         for line in f:
             record = json.loads(line)
             code = record.get("participant_id") or ""
-            if person_of(code) in sealed:
+            if person_of(code) in sealed or person_of(code) in exclude:
                 continue
             if record.get("quality_status") != "valid":
                 continue
@@ -62,7 +62,7 @@ def bases() -> list[dict]:
                     "width": int(record.get("stage_width") or 500),
                     "height": int(record.get("stage_height") or 375),
                 })
-    print(f"기반 궤적 {len(out)}개 (봉인 {sorted(sealed)} 제외)")
+    print(f"기반 궤적 {len(out)}개 (봉인 {sorted(sealed)} · 추가제외 {sorted(exclude)})")
     return out
 
 
@@ -70,11 +70,13 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--count", type=int, default=6000)
     ap.add_argument("--seed", type=int, default=20260806)
+    ap.add_argument("--exclude-person", nargs="*", default=[],
+                    help="이 사람들의 궤적은 공격 기반에서 뺀다 (평가용으로 남긴다)")
     ap.add_argument("--out", type=Path,
                     default=Path("data/interim/main_captcha_bots_development_20260806.jsonl"))
     args = ap.parse_args()
 
-    substrate = bases()
+    substrate = bases(set(args.exclude_person))
     if not substrate:
         raise SystemExit("기반 궤적이 없다")
 

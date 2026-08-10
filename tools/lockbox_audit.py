@@ -87,6 +87,7 @@ def main() -> int:
     problems: list[str] = []
     sealed: list[tuple[str, int | None, bool]] = []
     development: list[str] = []
+    unlabelled: list[str] = []
     spent: list[tuple[str, str]] = []
 
     for manifest_path in sorted(DATA_ROOT.rglob("*.manifest.json")):
@@ -105,8 +106,19 @@ def main() -> int:
         # Only `external_holdout_only` sets are holdouts. The rest are development
         # data the model is *supposed* to have seen; listing them as "still sealed"
         # would inflate the count of holdouts we can still spend.
+        #
+        # An ABSENT field is not a holdout either. Until 2026-08-08 a missing
+        # `training_usage` fell through to the sealed branch, so three datasets
+        # that sit 100% inside the training set were listed as spendable
+        # holdouts purely because nobody had labelled them. The safe default for
+        # "we do not know what this is" is "not a holdout" — claiming a holdout
+        # we do not have is the expensive direction of that error.
         usage = doc.get("training_usage")
-        if usage and usage != "external_holdout_only":
+        if usage is None:
+            unlabelled.append(name)
+            development.append(name)
+            continue
+        if usage != "external_holdout_only":
             development.append(name)
             continue
 
@@ -161,6 +173,11 @@ def main() -> int:
         mark = "해시확인" if ok else "해시미확인"
         print(f"  {name[:52]:54s}{'' if rows is None else f'{rows}행':>8s}  {state:9s} {mark}")
     print(f"\n개발용 (홀드아웃 아님) {len(development)}건")
+    if unlabelled:
+        print(f"  그중 training_usage 미기재 {len(unlabelled)}건 — 라벨이 없어서 "
+              "개발용으로 처리했다. 홀드아웃이면 매니페스트에 명시하라")
+        for name in sorted(unlabelled):
+            print(f"    {name}")
 
     print(f"\n소진 {len(spent)}건")
     by_model: dict[str, list[str]] = {}
