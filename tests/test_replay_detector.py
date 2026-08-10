@@ -9,6 +9,7 @@ from app.services.replay_detector import (
     DynamicTimeWarpingComparator,
     HistoricalAttempt,
     NormalizedPathComparator,
+    ProcrustesPathComparator,
     compute_replay_features,
     trace_fingerprint,
     trace_fingerprint_from_events,
@@ -103,3 +104,113 @@ def test_short_or_invalid_paths_do_not_look_identical():
     assert dtw.similarity(invalid, _curve()) == 0.0
     assert normalized.similarity(point, point) == 0.0
     assert trace_fingerprint(point) is None
+
+
+def _rotate(path: np.ndarray, radians: float, scale: float = 1.0) -> np.ndarray:
+    """What a replay attacker does to reuse a captured path on a new target."""
+    rotation = np.array([
+        [np.cos(radians), -np.sin(radians)],
+        [np.sin(radians), np.cos(radians)],
+    ])
+    return (path - path[0]) @ rotation.T * scale + path[0]
+
+
+def test_procrustes_sees_through_the_rotation_a_replay_must_apply():
+    """The transform that defines the attack must not be the one that hides it.
+
+    An attacker reusing a captured trajectory has to rotate it, because the
+    object is somewhere else this time. DTW normalizes away translation and
+    scale but not rotation, so it reads a rotated replay as an unrelated path —
+    measured at ~0.61 on real data, far below any threshold worth setting.
+    """
+    procrustes = ProcrustesPathComparator()
+    dtw = DynamicTimeWarpingComparator()
+    original = _curve()
+
+    for radians in (0.4, 1.2, 2.5, 4.0):
+        replayed = _rotate(original, radians, scale=1.3)
+        assert procrustes.similarity(original, replayed) > 0.99
+        assert dtw.similarity(original, replayed) < 0.9
+
+    # Invariance must not become blindness: a genuinely different shape stays
+    # far away no matter how it is turned.
+    other = np.column_stack((np.linspace(0.0, 1.0, 31), np.zeros(31)))
+    assert procrustes.similarity(original, _rotate(other, 1.0)) < 0.9
+
+
+def test_procrustes_is_symmetric_and_refuses_degenerate_paths():
+    procrustes = ProcrustesPathComparator()
+    a, b = _curve(), _rotate(_curve(), 0.8, scale=0.7)
+    assert procrustes.similarity(a, b) == pytest.approx(procrustes.similarity(b, a))
+
+    point = np.array([[0.0, 0.0]])
+    stationary = np.tile([0.5, 0.5], (20, 1))
+    invalid = np.array([[0.0, np.nan], [1.0, 1.0]])
+    assert procrustes.similarity(point, point) == 0.0
+    assert procrustes.similarity(stationary, _curve()) == 0.0
+    assert procrustes.similarity(invalid, _curve()) == 0.0
+
+
+def test_rotated_replay_scores_above_the_deployed_threshold():
+    """The comparator and the threshold have to move together.
+
+    `risk_dtw_similarity_threshold` was recalibrated for this comparator; if
+    either is changed alone the signal goes quiet without failing anything.
+    """
+    from app.config import Settings
+
+    threshold = Settings().risk_dtw_similarity_threshold
+    original = _curve()
+    history = [HistoricalAttempt(
+        path=original, duration_ms=700.0,
+        endpoint=(float(original[-1][0]), float(original[-1][1])),
+        created_at_epoch_s=1000.0,
+    )]
+    replayed = _rotate(original, 1.1, scale=1.2)
+    events = [{"seq": i, "event_type": "pointer_move", "t_ms": i * 50.0,
+               "x": float(x), "y": float(y)} for i, (x, y) in enumerate(replayed)]
+
+    features = compute_replay_features(
+        events, duration_ms=700.0, now_epoch_s=1001.0, history=history)
+    assert features.path_similarity_score >= threshold
+    assert not features.exact_replay_detected  # rotation changes the hash
+
+
+def test_joined_path_gates_on_length_and_drops_the_seam_duplicate():
+    """The aim/drag join must not manufacture a zero-length step at the seam.
+
+    `pointerdown` fires where the pointer already is, so the last aim sample and
+    the first drag sample can coincide. Left in, that step has undefined
+    direction and step length — the two quantities the fingerprint rests on.
+    """
+    from tools.aim_drag_path import MIN_POINTS_FOR_FINGERPRINT, join
+
+    aim = [{"x": i / 40.0, "y": 0.1 * i} for i in range(20)]
+    drag = [{"x": aim[-1]["x"], "y": aim[-1]["y"]}] + [
+        {"x": 0.5 + i / 40.0, "y": 2.0 + 0.1 * i} for i in range(15)]
+
+    joined = join(aim, drag)
+    assert joined.aim_points == 20
+    steps = np.linalg.norm(np.diff(joined.points, axis=0), axis=1)
+    assert steps.min() > 0.0             # seam duplicate removed
+    # drag carried 16 samples, one of them coinciding with the last aim sample.
+    assert joined.drag_points == 15      # counted after the seam is dropped
+    assert joined.total_points == 35
+
+    assert joined.judgeable()
+    # A drag on its own is exactly the case that cannot be judged: ~12 points,
+    # where warped replays are caught 1.4% of the time.
+    assert not join([], drag).judgeable()
+    assert MIN_POINTS_FOR_FINGERPRINT == 31
+
+
+def test_joined_path_survives_missing_halves():
+    from tools.aim_drag_path import join
+
+    drag = [{"x": i / 20.0, "y": 0.0} for i in range(12)]
+    assert join([], drag).total_points == 12
+    assert join(drag, []).total_points == 12
+    assert join([], []).total_points == 0
+    assert not join([], []).judgeable()
+    # Rows where the widget recorded no coordinates must not crash the join.
+    assert join([{"x": None, "y": None}], drag).total_points == 12

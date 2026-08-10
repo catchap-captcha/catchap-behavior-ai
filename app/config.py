@@ -75,7 +75,23 @@ class Settings(BaseSettings):
     # --- Advisory risk policy ---
     # These are policy weights, not calibrated probabilities. The backend uses
     # the returned action to step up verification; it remains the decision maker.
-    risk_dtw_similarity_threshold: float = 0.996693
+    # Read against `ProcrustesPathComparator` since 2026-08-10 — the name still
+    # says dtw because the deployed ConfigMap sets this key, and renaming it
+    # would silently fall back to the default in production.
+    #
+    # Calibrated on the surface it actually runs on: 593 collection drags from
+    # five people. Innocent cross-person pairs top out at 0.9805; replays
+    # rotated onto a new target bottom out at 0.9846.
+    #
+    #     0.98  ->  98.4% of rotated replays caught, 0.017% of human pairs hit
+    #     0.99  ->  83.5%                          , 0.000%
+    #
+    # 0.99 is the conservative pick. Per-pair false hits accumulate over a
+    # session (10 attempts is 45 pairs), and this signal steps up verification
+    # for real people, so the pair-level rate is what has to stay near zero.
+    # The old 0.996693 belonged to DTW, whose scores for the same rotated
+    # replays sat around 0.61 — that threshold caught 4.2% of them.
+    risk_dtw_similarity_threshold: float = 0.99
     risk_max_attempts_per_minute: float = 20.0
     risk_history_window_seconds: int = 60
     risk_history_max_attempts: int = 50

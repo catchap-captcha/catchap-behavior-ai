@@ -2,8 +2,8 @@
 
 The problem this attacks
 ------------------------
-The current model was trained on EDU-captcha point streams — trajectories with no
-press/release boundaries at all — and is scored on main-captcha drags. It shows:
+The current model was trained on EDU-captcha point streams and is scored on
+main-captcha drags. It shows:
 a handful of *human* sessions land near 0, and they belong to one person. Keeping
 that person's FRR under 2% forces the threshold down to 1.6e-5, at which 13.4% of
 bots also pass. Calibrate on the other person instead and bots stop passing, but
@@ -15,6 +15,14 @@ on the surface we actually score: one example per drag, from the main captcha.
 Leave-one-person-out, not leave-one-code-out: `sw-mouse` and `sw-mouse-v2` are the
 same human on two days, and splitting on the code would put that person on both
 sides and quietly manufacture the generalisation we are trying to measure.
+
+2026-08-06 correction: an earlier version of this note claimed the legacy traces
+carry no press/release boundaries and therefore cannot be segmented. That is
+wrong — 800/800 sampled legacy sessions segment cleanly, one drag each
+(pointerdown 800, pointerup 740, pointermove 135,806). So the 20,066 legacy rows
+ARE available for drag-unit training, and this script's people-starved result
+(FRR 9.9/25.0/22.7% with two people in training) is a consequence of the input
+it was handed, not a ceiling on the approach.
 
     .venv/bin/python tools/retrain_per_drag.py data/interim/main_captcha_raw_20260803b.jsonl
 """
