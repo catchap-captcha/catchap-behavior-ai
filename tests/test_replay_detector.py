@@ -9,6 +9,7 @@ from app.services.replay_detector import (
     DynamicTimeWarpingComparator,
     HistoricalAttempt,
     NormalizedPathComparator,
+    ProcrustesPathComparator,
     compute_replay_features,
     trace_fingerprint,
     trace_fingerprint_from_events,
@@ -103,3 +104,73 @@ def test_short_or_invalid_paths_do_not_look_identical():
     assert dtw.similarity(invalid, _curve()) == 0.0
     assert normalized.similarity(point, point) == 0.0
     assert trace_fingerprint(point) is None
+
+
+def _rotate(path: np.ndarray, radians: float, scale: float = 1.0) -> np.ndarray:
+    """What a replay attacker does to reuse a captured path on a new target."""
+    rotation = np.array([
+        [np.cos(radians), -np.sin(radians)],
+        [np.sin(radians), np.cos(radians)],
+    ])
+    return (path - path[0]) @ rotation.T * scale + path[0]
+
+
+def test_procrustes_sees_through_the_rotation_a_replay_must_apply():
+    """The transform that defines the attack must not be the one that hides it.
+
+    An attacker reusing a captured trajectory has to rotate it, because the
+    object is somewhere else this time. DTW normalizes away translation and
+    scale but not rotation, so it reads a rotated replay as an unrelated path —
+    measured at ~0.61 on real data, far below any threshold worth setting.
+    """
+    procrustes = ProcrustesPathComparator()
+    dtw = DynamicTimeWarpingComparator()
+    original = _curve()
+
+    for radians in (0.4, 1.2, 2.5, 4.0):
+        replayed = _rotate(original, radians, scale=1.3)
+        assert procrustes.similarity(original, replayed) > 0.99
+        assert dtw.similarity(original, replayed) < 0.9
+
+    # Invariance must not become blindness: a genuinely different shape stays
+    # far away no matter how it is turned.
+    other = np.column_stack((np.linspace(0.0, 1.0, 31), np.zeros(31)))
+    assert procrustes.similarity(original, _rotate(other, 1.0)) < 0.9
+
+
+def test_procrustes_is_symmetric_and_refuses_degenerate_paths():
+    procrustes = ProcrustesPathComparator()
+    a, b = _curve(), _rotate(_curve(), 0.8, scale=0.7)
+    assert procrustes.similarity(a, b) == pytest.approx(procrustes.similarity(b, a))
+
+    point = np.array([[0.0, 0.0]])
+    stationary = np.tile([0.5, 0.5], (20, 1))
+    invalid = np.array([[0.0, np.nan], [1.0, 1.0]])
+    assert procrustes.similarity(point, point) == 0.0
+    assert procrustes.similarity(stationary, _curve()) == 0.0
+    assert procrustes.similarity(invalid, _curve()) == 0.0
+
+
+def test_rotated_replay_scores_above_the_deployed_threshold():
+    """The comparator and the threshold have to move together.
+
+    `risk_dtw_similarity_threshold` was recalibrated for this comparator; if
+    either is changed alone the signal goes quiet without failing anything.
+    """
+    from app.config import Settings
+
+    threshold = Settings().risk_dtw_similarity_threshold
+    original = _curve()
+    history = [HistoricalAttempt(
+        path=original, duration_ms=700.0,
+        endpoint=(float(original[-1][0]), float(original[-1][1])),
+        created_at_epoch_s=1000.0,
+    )]
+    replayed = _rotate(original, 1.1, scale=1.2)
+    events = [{"seq": i, "event_type": "pointer_move", "t_ms": i * 50.0,
+               "x": float(x), "y": float(y)} for i, (x, y) in enumerate(replayed)]
+
+    features = compute_replay_features(
+        events, duration_ms=700.0, now_epoch_s=1001.0, history=history)
+    assert features.path_similarity_score >= threshold
+    assert not features.exact_replay_detected  # rotation changes the hash
