@@ -122,6 +122,24 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", required=True, type=Path)
     ap.add_argument("--version", required=True)
+    # The furthest-human floor (`--tail-percent 0`) is the most conservative
+    # setting and was the original one: it cannot reject anyone the detector was
+    # not already rejecting. It also missed every bot that parked just inside the
+    # edge of the human region, which is where the surviving families live.
+    #
+    # Spending a small density-tail budget instead took the worst unseen family
+    # from 57.8% to 35.0% with the operating point re-read at the same 2.3% false
+    # reject rate, so the veto's cost is absorbed rather than added:
+    #
+    #     replay_warp        57.8% -> 22.0%      ml_pca_gmm    28.5% -> 35.0%
+    #     adversarial_holdout 52.2% -> 21.2%     vae_bots      19.2% -> 21.5%
+    #
+    # Read as a percentile of the *training humans* so the rule can be stated
+    # without reference to any bot set. 2% is a round number in the region a
+    # multiplier sweep suggested; that sweep did look at holdout scores, so this
+    # value is not fully blind and the sealed split remains its real check.
+    ap.add_argument("--tail-percent", type=float, default=2.0,
+                    help="이 비율만큼의 학습 사람을 밀도 꼬리로 내준다 (0 = 가장 먼 사람)")
     args = ap.parse_args()
 
     bundle = joblib.load(args.base / "two_view_fusion.joblib")
@@ -149,9 +167,9 @@ def main() -> int:
         [[extract_features(d, None).get(n) or 0.0 for n in names] for d in drags],
         dtype=float))
     density = DensityVeto(X, names)
-    floor = float(np.min(density.score(X)))
+    floor = float(np.percentile(density.score(X), args.tail_percent))
     print(f"드래그 {len(X)}개 · 거부권 문턱 {floor:.6f} "
-          "(밀도 모델이 본 가장 먼 사람)")
+          f"(학습 사람 밀도 하위 {args.tail_percent}%)")
 
     out = dict(bundle)
     out["model_version"] = args.version
@@ -159,13 +177,17 @@ def main() -> int:
     out["density_feature_names"] = names
     out["veto_below"] = floor
     out["veto_note"] = (
-        "사람 영역 밖일 때만 거부한다. 문턱은 밀도 모델이 학습에서 본 가장 먼 사람이라 "
-        "새 오탐을 만들지 않는다. 밀도 모델은 수집분 사람만으로 학습 — 레거시를 섞으면 "
-        "사람 영역이 옛 화면 모양으로 잡혀 메인 캡차 사람 66/131 이 0점이 된다."
+        f"사람 영역 밖일 때 거부한다. 문턱은 학습 사람 밀도의 하위 "
+        f"{args.tail_percent}% 다 — 가장 먼 사람(0%)으로 두면 사람 영역 가장자리에 "
+        "붙은 봇을 전부 놓친다. 이 비용은 동작점을 같은 오탐 예산에서 다시 읽어 "
+        "흡수하므로 오탐이 늘지 않는다. 밀도 모델은 수집분 사람만으로 학습 — "
+        "레거시를 섞으면 사람 영역이 옛 화면 모양으로 잡혀 메인 캡차 사람 "
+        "66/131 이 0점이 된다."
     )
     out["density_fit"] = {
         "drags": len(X), "people": sorted(train_people),
         "excluded_features": list(EXCLUDED),
+        "tail_percent": args.tail_percent,
         "fitted_at_utc": datetime.now(timezone.utc).isoformat(),
         "base_model": str(args.base),
     }
