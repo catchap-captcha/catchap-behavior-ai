@@ -29,7 +29,15 @@ class Settings(BaseSettings):
     mysql_port: int = 3306
     mysql_user: str = "ai_service"
     mysql_password: str = ""
-    mysql_database: str = "catchap"
+    # ⚠️★기본값을 "catchap" 에서 "catchap_ai" 로 바꿨다 (2026-08-10).
+    #
+    #   운영은 ConfigMap 이 MYSQL_DATABASE=catchap_ai 를 주므로 지금도 옳은 DB 에 붙는다.
+    #   ★문제는 그 값이 빠졌을 때다 — 옛 기본값 "catchap" 에는 ★2026-08-09 컷오버 때
+    #   복원된 ai_* 표 10개가 ★그대로 있다(7/29~7/30 데이터 9행).
+    #   그러면 앱이 ★오류 없이 뜨고, ★엉뚱한 표에 쓰기 시작한다. 아무도 모른다.
+    #
+    #   ★"틀리면 시끄럽게 죽는다"가 안 되는 자리라, ★맞는 곳을 기본값으로 둔다.
+    mysql_database: str = "catchap_ai"
     mysql_pool_size: int = 5
 
     # --- Auth (interfaces; empty means "no key configured") ---
