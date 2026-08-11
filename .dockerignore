@@ -15,7 +15,13 @@ scripts/
 output/
 tmp/
 local-test-data/
-# Only the promoted/candidate bundle the Dockerfile copies is needed; the other
-# 20-odd candidates and the GAN artefacts are training-side and large.
+# Only the bundles the Dockerfile copies are needed; the other 20-odd candidates
+# and the GAN artefacts are training-side and large.
+#
+# ⚠️ 여기와 .gitignore 와 Dockerfile 세 곳이 같이 움직여야 한다. 2026-08-10 에
+# .gitignore 예외와 Dockerfile COPY 만 새 번들로 늘리고 이 파일을 빠뜨려서,
+# 파일이 저장소에는 들어갔는데 빌드 컨텍스트에는 없어 이미지 빌드가 죽었다
+# (COPY ... : not found). 번들을 추가·교체할 때 세 곳을 함께 확인할 것.
 models/
 !models/candidate/revalidation_two_view_participant_safe_20260722/
+!models/candidate/surface_aware_veto_20260810/
