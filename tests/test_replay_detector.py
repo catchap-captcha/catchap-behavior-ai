@@ -255,3 +255,50 @@ def test_density_veto_is_applied_when_the_bundle_carries_one():
 
     broken = dict(vetoed, density_veto=_Broken())
     assert ModelService._apply_density_veto(broken, features, 0.9) == 0.9
+
+
+def test_shipped_bundle_loads_without_a_patched_main():
+    """A bundle must unpickle in a process that never ran the training script.
+
+    Every local check used to do
+
+        sys.modules["__main__"].DensityVeto = DensityVeto
+
+    before loading, which is exactly the condition production does not have. So
+    a bundle that pickled the class as `__main__.DensityVeto` passed every check
+    here and failed in the cluster with
+
+        AttributeError: Can't get attribute 'DensityVeto' on <module 'main'>
+
+    while `/health` still returned 200 and every prediction recorded as
+    `unavailable`. The harness was patching away the failure it existed to catch.
+
+    This test asserts the property directly: the class the bundle references must
+    live at an importable module path, not in whatever `__main__` happens to be.
+    """
+    import subprocess
+    from pathlib import Path
+
+    # Only what the repo actually ships. `models/candidate/*` is gitignored with
+    # per-directory exceptions, and the Dockerfile copies exactly those — local
+    # experiment bundles are not deployed and must not fail the build.
+    tracked = subprocess.run(
+        ["git", "ls-files", "models/candidate/"],
+        capture_output=True, text=True, check=False).stdout.split()
+    shipped = [Path(p) for p in tracked if p.endswith("two_view_fusion.joblib")]
+    assert shipped, "배포 대상 번들이 없다 — .gitignore 예외를 확인할 것"
+
+    for path in shipped:
+        blob = path.read_bytes()
+        # joblib writes a pickle; module paths appear verbatim in the opcodes.
+        assert b"__main__" not in blob, (
+            f"{path} 가 __main__ 을 참조한다 — 학습 스크립트 밖에서는 풀리지 않는다. "
+            "커스텀 클래스는 app/ 아래 import 가능한 모듈에 두고 다시 저장할 것."
+        )
+
+
+def test_density_veto_class_is_importable_from_the_app():
+    """Where this class lives is part of the bundle contract, not a detail."""
+    from app.services.density_veto import DensityVeto
+
+    assert DensityVeto.__module__ == "app.services.density_veto"
