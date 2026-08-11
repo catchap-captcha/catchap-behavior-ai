@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -302,3 +304,26 @@ def test_density_veto_class_is_importable_from_the_app():
     from app.services.density_veto import DensityVeto
 
     assert DensityVeto.__module__ == "app.services.density_veto"
+
+
+def test_model_service_exposes_model_version_as_a_property():
+    """`model_version` is a property; calling it raises TypeError.
+
+    The startup logger added to catch a *silent* model failure called it with
+    parentheses, so on a healthy boot the log line itself threw and the outer
+    handler reported `[MODEL] ★모델 적재 중 예외 — TypeError: 'str' object is not
+    callable`. The model was fine; the log lied about it, in the one direction
+    that wastes an operator's time.
+
+    `app/api/health.py` had it right all along, which is what makes this worth a
+    test: two call sites, one convention, and nothing enforcing agreement.
+    """
+    import inspect
+    from app.services.model_service import ModelService
+
+    assert isinstance(inspect.getattr_static(ModelService, "model_version"), property)
+
+    source = Path("app/main.py").read_text(encoding="utf-8")
+    assert "model_service.model_version()" not in source, (
+        "app/main.py 가 property 를 호출하고 있다 — 괄호를 빼야 한다"
+    )
