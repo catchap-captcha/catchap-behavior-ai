@@ -31,11 +31,22 @@ async def lifespan(_: FastAPI):
     _secrets = secrets_loader.last_result()
     print("[SECRETS] " + (_secrets.summary() if _secrets
                           else "Secrets Manager 로더가 실행되지 않았습니다"), file=sys.stderr)
-    # Best-effort load; absence of a model must not stop startup.
+    # Best-effort load; absence of a model must not stop startup. But it must
+    # not be silent either: a bundle that fails to unpickle leaves the service
+    # Running, /health at 200, and every prediction recorded as `unavailable`.
+    # That happened on 2026-08-10 — a bundle pickled a class as `__main__.X`,
+    # which resolves only inside the training script, and nothing anywhere said
+    # so. The operator found it by reading `model_loaded` in /health.
+    #   ★위 [SECRETS] 와 같은 이유로 print(stderr) 를 쓴다 — logging 은 안 보인다.
     try:
-        model_service.load()
-    except Exception:
-        pass
+        if not model_service.load():
+            print(f"[MODEL] ★모델이 실리지 않았습니다 — {get_settings().production_model_dir} "
+                  "· /health 의 model_loaded 가 false 이고 모든 판정이 unavailable 로 기록됩니다",
+                  file=sys.stderr)
+        else:
+            print(f"[MODEL] {model_service.model_version()} 실림", file=sys.stderr)
+    except Exception as exc:
+        print(f"[MODEL] ★모델 적재 중 예외 — {type(exc).__name__}: {exc}", file=sys.stderr)
     yield
 
 
