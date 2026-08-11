@@ -20,8 +20,12 @@ RUN pip install --no-cache-dir -r requirements-serve.txt
 # are never baked into the image.
 COPY app/ ./app/
 COPY learning/ ./learning/
+# 두 벌 다 넣는다. ConfigMap 의 PRODUCTION_MODEL_DIR 이 어느 쪽을 가리키든 이미지가
+# 그것을 갖고 있어야 하고, 되돌릴 때도 이미지를 다시 굽지 않고 설정 한 줄로 끝난다.
 COPY models/candidate/revalidation_two_view_participant_safe_20260722/ \
      ./models/candidate/revalidation_two_view_participant_safe_20260722/
+COPY models/candidate/surface_aware_veto_20260810/ \
+     ./models/candidate/surface_aware_veto_20260810/
 
 RUN useradd --create-home --uid 10001 aiservice && chown -R aiservice:aiservice /app
 USER aiservice

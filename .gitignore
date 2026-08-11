@@ -30,6 +30,7 @@ models/candidate/*
 # repo — infra builds the image from this branch, so an ignored .joblib means
 # there is no way to prove the image matches what is running.
 !models/candidate/revalidation_two_view_participant_safe_20260722/
+!models/candidate/surface_aware_veto_20260810/
 models/production/*
 !models/**/.gitkeep
 

@@ -214,3 +214,44 @@ def test_joined_path_survives_missing_halves():
     assert not join([], []).judgeable()
     # Rows where the widget recorded no coordinates must not crash the join.
     assert join([{"x": None, "y": None}], drag).total_points == 12
+
+
+def test_density_veto_is_applied_when_the_bundle_carries_one():
+    """A veto in the bundle must actually run, and its absence must change nothing.
+
+    The threshold in a veto-equipped bundle is calibrated assuming the veto
+    rejects its share of humans. Loading such a bundle into a scorer that ignores
+    the veto does not merely lose the veto — it leaves an operating point that no
+    longer means anything. Measured on 200 real production traces, the same
+    bundle flagged 8.5% with the veto and 0.5% without, and the second number is
+    the model waving bots through, not a false-reject improvement.
+    """
+    from app.services.model_service import ModelService
+
+    class _AlwaysOutside:
+        def score(self, X):
+            return np.zeros(len(X))
+
+    features = {"speed_std": 1.0}
+    plain = {"threshold": 0.5}
+    assert ModelService._apply_density_veto(plain, features, 0.9) == 0.9
+
+    vetoed = {"threshold": 0.5, "density_veto": _AlwaysOutside(),
+              "density_feature_names": ("speed_std",), "veto_below": 0.5}
+    assert ModelService._apply_density_veto(vetoed, features, 0.9) == 0.0
+
+    class _Inside:
+        def score(self, X):
+            return np.ones(len(X))
+
+    inside = dict(vetoed, density_veto=_Inside())
+    assert ModelService._apply_density_veto(inside, features, 0.9) == 0.9
+
+    # A broken veto must not reject every human — failing open is the safe
+    # direction when the alternative is rejecting everyone.
+    class _Broken:
+        def score(self, X):
+            raise ValueError("boom")
+
+    broken = dict(vetoed, density_veto=_Broken())
+    assert ModelService._apply_density_veto(broken, features, 0.9) == 0.9
