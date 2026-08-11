@@ -127,6 +127,8 @@ class ModelService:
                 view_scores.append(self._positive_proba(model, vector))
             human_score = min(view_scores)
 
+        human_score = self._apply_density_veto(bundle, features, human_score)
+
         threshold = float(bundle["threshold"])
         prediction = "human" if human_score >= threshold else "bot"
         return {
@@ -144,6 +146,43 @@ class ModelService:
             "model_version": bundle["model_version"],
             "feature_schema_version": bundle["feature_schema_version"],
         }
+
+    @staticmethod
+    def _apply_density_veto(bundle: dict[str, Any], features: dict[str, float],
+                            human_score: float) -> float:
+        """Force the score to 0 when the trace sits outside the human region.
+
+        Gradient-boosted trees do not extrapolate. A region of feature space with
+        no training points gets whatever leaf it happens to fall into, and the
+        "perfectly uniform" corner lands on the human side — a straight constant
+        speed bot, separable from humans at AUC 1.000 on a single feature, passed
+        100% of the time when its family was held out of training. Adding features
+        cannot fix an empty corner; only having an opinion about emptiness can.
+
+        The density model supplies that opinion, and it is carried in the bundle
+        rather than computed here so the veto and the threshold it was calibrated
+        against can never drift apart.
+
+        ⚠️ The threshold in a veto-equipped bundle assumes this runs. On the
+        2026-08-10 candidate the veto rejects ~2.3% of human drags, and the
+        operating point was re-read at that cost; scoring the same bundle without
+        it drops the flag rate from 8.5% to 0.5% — which looks like a false-reject
+        improvement and is really the model waving everything through, bots
+        included. Bundles with no `density_veto` (everything deployed before
+        2026-08-10) are unaffected and take the early return.
+        """
+        veto = bundle.get("density_veto")
+        names = bundle.get("density_feature_names")
+        floor = bundle.get("veto_below")
+        if veto is None or not names or floor is None:
+            return human_score
+        vector = np.nan_to_num(
+            np.array([[float(features.get(name, 0.0) or 0.0) for name in names]], dtype=float))
+        try:
+            density = float(veto.score(vector)[0])
+        except Exception:                      # noqa: BLE001 - a broken veto must not
+            return human_score                 # silently reject every human
+        return 0.0 if density < float(floor) else human_score
 
     def score_per_drag(
         self,

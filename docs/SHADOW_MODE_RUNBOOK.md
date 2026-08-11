@@ -10,13 +10,27 @@ CAPTCHA UI가 완성된 뒤, AI 권고가 실제 사용자를 과도하게 방�
 
 ```dotenv
 RISK_POLICY_MODE=shadow
-PRODUCTION_MODEL_DIR=models/candidate/revalidation_two_view_participant_safe_20260722
+PRODUCTION_MODEL_DIR=models/candidate/surface_aware_veto_20260810
 CAPTCHA_BACKEND_API_KEY=<backend-only-secret>
 ADMIN_API_KEY=<admin-only-secret>
 ```
 
 `PRODUCTION_MODEL_DIR`은 shadow 환경에서만 candidate bundle을 읽기 위한 경로다. 이 설정은
 candidate를 production 승격하는 행위가 아니다.
+
+2026-08-10 에 가리키는 곳을 `revalidation_two_view_participant_safe_20260722` 에서
+`surface_aware_veto_20260810` 으로 옮겼다. 이미지에는 두 벌 다 들어 있으므로, 되돌릴
+때는 이 값만 옛 경로로 돌리면 되고 이미지를 다시 굽지 않아도 된다.
+
+옮긴 이유는 옛 번들의 동작점이 이 표면의 것이 아니기 때문이다. 임계값 0.99995 는
+2026-07-22 레거시 데이터에서 뽑았는데, 운영에 실제로 쌓인 궤적 200건으로 재보면
+사람의 **44.0%** 를 의심으로 판정한다(DB 실측 40.9% 와 일치). 새 번들은 같은 궤적에서
+8.5% 다.
+
+⚠️ 새 번들은 밀도 거부권을 들고 있고, 그 임계값은 거부권이 함께 도는 것을 전제로
+보정됐다. `model_service._apply_density_veto` 가 그것을 적용한다 — 번들만 바꾸고 그
+코드가 없으면 같은 궤적에서 0.5% 가 나오는데, 이는 오탐이 좋아진 것이 아니라 봇까지
+전부 통과시키는 상태다.
 
 3. 서비스 재시작 후 `GET /health`에서 다음을 확인한다.
 
