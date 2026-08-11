@@ -44,7 +44,7 @@ async def lifespan(_: FastAPI):
                   "· /health 의 model_loaded 가 false 이고 모든 판정이 unavailable 로 기록됩니다",
                   file=sys.stderr)
         else:
-            print(f"[MODEL] {model_service.model_version()} 실림", file=sys.stderr)
+            print(f"[MODEL] {model_service.model_version} 실림", file=sys.stderr)
     except Exception as exc:
         print(f"[MODEL] ★모델 적재 중 예외 — {type(exc).__name__}: {exc}", file=sys.stderr)
     yield
