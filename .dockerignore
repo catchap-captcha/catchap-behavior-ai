@@ -25,3 +25,7 @@ local-test-data/
 models/
 !models/candidate/revalidation_two_view_participant_safe_20260722/
 !models/candidate/surface_aware_veto_20260810/
+# ⚠️여기와 .gitignore 는 **같이** 고쳐야 한다. .gitignore 만 풀면 커밋은 되지만
+#   빌드 컨텍스트에서 빠져 `COPY ... not found` 로 이미지가 안 만들어진다.
+#   #10 에 이어 0812 에 같은 실패를 한 번 더 했다.
+!models/candidate/aim_overall3_20260812/
