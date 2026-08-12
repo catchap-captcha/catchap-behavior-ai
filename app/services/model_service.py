@@ -98,6 +98,16 @@ class ModelService:
         return get_settings().feature_schema_version
 
     @property
+    def uses_aim(self) -> bool:
+        """번들이 조준 구간까지 보고 학습됐는가.
+
+        기본은 False 다 — 조준 없이 학습된 모델에 조준을 넘기면 학습 때 본 적 없는
+        분포가 되어 판정이 흔들린다. 번들이 스스로 밝힐 때만 넘긴다. 이 플래그가
+        모델과 함께 다니므로, 모델을 되돌리면 입력도 같이 되돌아간다.
+        """
+        return bool(self._bundle and self._bundle.get("uses_aim"))
+
+    @property
     def feature_input_scope(self) -> str:
         if self._bundle:
             return str(self._bundle.get("feature_input_scope", "all_behavioral_features"))

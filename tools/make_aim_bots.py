@@ -198,6 +198,10 @@ def d_replay(start, target, duration, rng, bursts):
     # clipped flat against its border — manufacturing sharp corners that showed
     # up as `turn_abs_mean` AUC 0.878. An attacker holding a library of captured
     # aims chooses a near-length one; only my generator was careless.
+    # 방향도 같은 이유로 맞춘다. 아무 방향으로나 돌리면 옆으로 크게 휘는 조준일수록
+    # 화면을 벗어나 버려지고, 곧은 것만 살아남는다 — 그 편향이 `linearity` AUC 0.69 로
+    # 나왔다(2026-08-12). 길이를 맞추는 것과 같은 논리다: 캡처 라이브러리를 든
+    # 공격자는 방향이 비슷한 것을 고르지, 아무 것이나 90도 돌려 쓰지 않는다.
     pts, src_t = None, None
     for attempt in range(40):
         candidate, cand_t = to_arrays(rng.choice(bursts))
@@ -207,6 +211,9 @@ def d_replay(start, target, duration, rng, bursts):
         if not (0.6 <= scale <= 1.7) and attempt < 30:
             continue
         theta = float(np.arctan2(dst_vec[1], dst_vec[0]) - np.arctan2(src_vec[1], src_vec[0]))
+        turn = abs((theta + np.pi) % (2 * np.pi) - np.pi)
+        if turn > np.pi / 4 and attempt < 30:
+            continue
         rot = np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
         moved = (candidate - candidate[0]) @ rot.T * scale + start
         if moved.min() >= -0.02 and moved.max() <= 1.02:

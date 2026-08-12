@@ -26,6 +26,11 @@ COPY models/candidate/revalidation_two_view_participant_safe_20260722/ \
      ./models/candidate/revalidation_two_view_participant_safe_20260722/
 COPY models/candidate/surface_aware_veto_20260810/ \
      ./models/candidate/surface_aware_veto_20260810/
+# 조준을 보는 번들. `uses_aim` 이 붙어 있어 앱이 조준을 분류기에도 넘긴다
+# (`api/predict.py`). 세 벌이 같은 이미지에 있으므로 되돌릴 때도 ConfigMap 한 줄이면
+# 되고 이미지를 다시 굽지 않는다.
+COPY models/candidate/aim_overall3_20260812/ \
+     ./models/candidate/aim_overall3_20260812/
 
 RUN useradd --create-home --uid 10001 aiservice && chown -R aiservice:aiservice /app
 USER aiservice
