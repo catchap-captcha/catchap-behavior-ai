@@ -573,3 +573,35 @@ def test_prediction_row_carries_the_audit_record(client, sqlite_sessionmaker):
     assert meta["captcha"]["width"] and meta["captcha"]["height"], "챌린지 크기가 없다"
     assert meta["event_count"] == len(payload["events"])
     assert meta["scoring_unit"] in ("session", "per_drag")
+
+
+def test_predict_renumbers_seq_after_dropping_aim(client):
+    """조준을 빼면 seq 에 구멍이 남는다 — 품질 검사가 그걸 하드 실패로 본다.
+
+    `quality_validator` 는 seq 가 0부터 빈틈없이 이어질 것을 요구한다. 구멍이 남으면
+    seq_not_sequential → invalid_event_telemetry → 위험도가 올라 step_up 이 된다.
+    0812 에 실제로 이렇게 나갔다. shadow 라 무해했지만 active 였다면 조준이 있는
+    사용자가 전부 캡차를 한 번 더 받았을 것이다.
+
+    저장·재생 경로는 조준을 포함한 **원래 seq** 를 그대로 써야 하므로, 다시 매기는
+    것은 걸러낸 쪽 복사본에서만 일어나야 한다.
+    """
+    _load_risk_model(0.9)
+    payload = _collect_payload("att_aim_seq")
+    payload.pop("collection", None)
+    first = payload["events"][0]
+    aim = [
+        {**first, "seq": i, "event_type": "aimmove",
+         "t_ms": first["t_ms"] - 500 + i * 40}
+        for i in range(4)
+    ]
+    body = [dict(e, seq=len(aim) + i) for i, e in enumerate(payload["events"])]
+    payload["events"] = aim + body
+
+    response = client.post(
+        "/api/v1/behavior/predict", json=payload, headers=_backend_headers()
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert "invalid_event_telemetry" not in body["reasons"], body
+    assert body["recommended_action"] == "allow", body

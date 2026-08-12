@@ -81,10 +81,16 @@ def predict(payload: PredictRequest, session: Session = Depends(get_session)):
     # 7.1% 에서 8.4% 로 올라간다.
     all_events = [e.model_dump() for e in payload.events]
     #
-    # `seq` 는 다시 매기지 않는다. 자른 결과는 같은 dict 객체를 가리키므로 여기서
-    # 손대면 저장·재생 경로가 쓰는 `all_events` 까지 바뀐다. 남은 seq 도 시간 순으로
-    # 증가하므로 정렬에는 문제가 없다.
-    events = trim_aim(all_events) if model_service.uses_aim else without_aim(all_events)
+    # 걸러낸 쪽은 **복사본에 `seq` 를 다시 매긴다.** 품질 검사가 seq 가 0부터
+    # 빈틈없이 이어질 것을 요구하기 때문이다(`quality_validator`: seq_not_sequential
+    # → invalid_event_telemetry → 위험도 상승 → step_up). 조준을 빼면 그 자리에
+    # 구멍이 남는다. 0812 에 실제로 이렇게 나갔다 — shadow 라 무해했지만 active 였다면
+    # 조준이 있는 사용자가 전부 캡차를 한 번 더 받았을 것이다.
+    #
+    # 복사본이어야 하는 이유: 자른 결과는 같은 dict 객체를 가리키므로 제자리에서
+    # 손대면 저장·재생 경로가 쓰는 `all_events` 의 seq 까지 바뀐다.
+    kept = trim_aim(all_events) if model_service.uses_aim else without_aim(all_events)
+    events = [{**event, "seq": index} for index, event in enumerate(kept)]
 
     # Validate raw events (result is advisory here; we still score, but a broken
     # payload is recorded with its quality status when persisted).
