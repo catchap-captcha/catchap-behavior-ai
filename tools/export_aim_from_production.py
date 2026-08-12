@@ -23,6 +23,12 @@
 봉인 참가자는 거른다. `collection_split_20260806.json` 의 holdout 은 최종 검증용이라
 학습 경로에 한 번이라도 들어가면 그 검증이 무의미해진다.
 
+**참가자는 `catchap_ai.ai_behavior_attempts.participant_id` 에서 문항 단위로 가져온다.**
+세션 ID 로는 사람을 못 가른다 — 로그인 캡차의 세션 ID 는 `guard-<시각>-<난수>` 라
+사람 정보가 없고(그래서 앞글자로 거르던 옛 방식은 봉인 필터가 한 번도 안 걸렸다),
+수집 페이지에서도 한 세션을 두 사람이 이어 쓴 사례가 실제로 있었다(2026-08-12:
+`2b4bdda8` = jk+nn, `a696efa7` = jy+wg). 문항 하나에 코드가 둘 붙은 경우는 없다.
+
     .venv/bin/python tools/export_aim_from_production.py \
         --password-file <file> --since '2026-08-12 04:30:00' \
         --out data/interim/aim_production_20260812.jsonl
@@ -47,9 +53,12 @@ DRAG_TYPES = {"pointer_move", "drop"}
 
 
 QUERY = """
-SELECT c.id, c.session_id, b.batch_seq, b.events_json
+SELECT c.id, c.session_id, COALESCE(a.participant_id, ''), b.batch_seq, b.events_json
 FROM captcha_challenges_v2 c
 JOIN captcha_behavior_batches b ON b.challenge_id = c.id
+LEFT JOIN (SELECT challenge_id, MAX(participant_id) AS participant_id
+           FROM catchap_ai.ai_behavior_attempts
+           GROUP BY challenge_id) a ON a.challenge_id = c.id
 WHERE c.created_at >= '{since}'
 ORDER BY c.id, b.batch_seq;
 """
@@ -109,6 +118,9 @@ def main() -> int:
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--key", type=Path,
                     default=Path.home() / "finally project/keypair/catchap_keypair")
+    ap.add_argument("--require-participant", action="store_true",
+                    help="참가자 코드가 없는 문항도 뺀다. 봉인 참가자가 코드를 안 붙이고 "
+                         "푼 경우까지 막으려면 학습 경로에서는 이걸 쓴다.")
     args = ap.parse_args()
 
     sealed = set(json.loads(SPLIT.read_text())["holdout_people"])
@@ -117,31 +129,42 @@ def main() -> int:
     by_challenge: dict[str, dict] = {}
     for line in raw.splitlines()[1:]:
         parts = line.split("\t")
-        if len(parts) < 4:
+        if len(parts) < 5:
             continue
-        cid, session, _, events_json = parts[0], parts[1], parts[2], "\t".join(parts[3:])
+        cid, session, participant = parts[0], parts[1], parts[2].strip()
+        events_json = "\t".join(parts[4:])
         try:
             events = json.loads(events_json.replace("\\n", "\n"))
         except json.JSONDecodeError:
             continue
-        slot = by_challenge.setdefault(cid, {"session_id": session, "events": []})
+        slot = by_challenge.setdefault(
+            cid, {"session_id": session, "participant_id": participant, "events": []})
         slot["events"].extend(events)
 
-    written = skipped_sealed = 0
+    written = skipped_sealed = skipped_unknown = 0
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with args.out.open("w") as out:
         for cid, slot in by_challenge.items():
-            person = (slot["session_id"] or "?").split("-")[0]
+            person = slot["participant_id"]
             if person in sealed:
                 skipped_sealed += 1
                 continue
+            if not person:
+                # 코드가 없으면 봉인 참가자인지 아닌지를 확인할 방법이 없다. 연구용
+                # 측정에는 써도 되지만 학습 경로에서는 --require-participant 로 뺀다.
+                skipped_unknown += 1
+                if args.require_participant:
+                    continue
             for row in split_runs(slot["events"]):
                 row["challenge_id"] = cid
-                row["participant_id"] = slot["session_id"]
+                row["session_id"] = slot["session_id"]
+                row["participant_id"] = person or None
                 out.write(json.dumps(row, ensure_ascii=False) + "\n")
                 written += 1
 
-    print(f"  챌린지 {len(by_challenge)}개 · 봉인 제외 {skipped_sealed}개 · 기록 {written}행")
+    kept_unknown = "제외" if args.require_participant else "포함"
+    print(f"  챌린지 {len(by_challenge)}개 · 봉인 제외 {skipped_sealed}개 "
+          f"· 코드없음 {skipped_unknown}개({kept_unknown}) · 기록 {written}행")
     print(f"  -> {args.out}")
     if written:
         sys.path.insert(0, str(ROOT))

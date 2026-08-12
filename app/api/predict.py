@@ -27,6 +27,7 @@ from app.services.feature_profiles import get_feature_profile
 from app.services.model_service import model_service
 from app.services.scoring_audit import build_audit
 from app.services.quality_validator import QUALITY_REJECTED, validate_attempt
+from app.services.aim_segment import trim_aim, without_aim
 from app.services.replay_detector import compute_replay_features
 from app.services.risk_fusion import RiskFusionPolicy, fuse_behavior_risk
 
@@ -64,7 +65,26 @@ def predict(payload: PredictRequest, session: Session = Depends(get_session)):
             content=ModelNotReadyResponse().model_dump(),
         )
 
-    events = [e.model_dump() for e in payload.events]
+    # 조준(`aimmove`)을 누가 보는지는 번들이 정한다.
+    #
+    # 재생 탐지기는 항상 본다 — 길이가 곧 성능이라, 드래그만 13점이면 변형 재생을
+    # 9.3% 잡지만 조준을 이으면 27점이 되어 95.7% 를 잡는다(2026-08-12, 실사용
+    # 1,323개). `_to_path` 는 좌표만 있으면 유형을 안 가리므로 그대로 넘기면 된다.
+    #
+    # 분류기는 `uses_aim` 인 번들만 본다. 세션 특징 추출기가 이벤트 유형을 안 가려서
+    # (`feature_extractor_v23.extract_features` 가 받은 것을 전부 쓴다), 조준 없이
+    # 학습된 모델에 넘기면 학습 때 본 적 없는 분포가 되고 `scoring_unit="session"`
+    # 이라 그게 그대로 판정이 된다.
+    #
+    # 조준을 보는 번들에는 **학습과 같은 규칙으로 잘라서** 넘긴다. 자르지 않으면
+    # 문제를 읽는 동안 커서가 돌아다닌 것까지 궤적이 되어, 미지 계열 통과율이
+    # 7.1% 에서 8.4% 로 올라간다.
+    all_events = [e.model_dump() for e in payload.events]
+    #
+    # `seq` 는 다시 매기지 않는다. 자른 결과는 같은 dict 객체를 가리키므로 여기서
+    # 손대면 저장·재생 경로가 쓰는 `all_events` 까지 바뀐다. 남은 seq 도 시간 순으로
+    # 증가하므로 정렬에는 문제가 없다.
+    events = trim_aim(all_events) if model_service.uses_aim else without_aim(all_events)
 
     # Validate raw events (result is advisory here; we still score, but a broken
     # payload is recorded with its quality status when persisted).
@@ -123,9 +143,12 @@ def predict(payload: PredictRequest, session: Session = Depends(get_session)):
         # deliberately unavailable until storage recovers.
         session.rollback()
         history = []
+    # 이력(`history`)은 저장된 이벤트 전부로 경로를 만든다 — 유형을 안 가린다. 그래서
+    # 현재 시도도 조준을 포함한 전체 경로로 비교해야 같은 모양끼리 맞붙는다.
+    # 소요시간도 같은 이유로 전체 구간에서 읽는다.
     replay = compute_replay_features(
-        events,
-        duration_ms=_duration_ms(events),
+        all_events,
+        duration_ms=_duration_ms(all_events),
         now_epoch_s=now.replace(tzinfo=timezone.utc).timestamp(),
         history=history,
         recent_window_s=float(settings.risk_history_window_seconds),
@@ -146,7 +169,10 @@ def predict(payload: PredictRequest, session: Session = Depends(get_session)):
     _persist(
         session,
         payload,
-        events,
+        # 저장도 전체 경로여야 한다 — 다음 시도가 이걸 `recent_session_history` 로
+        # 되읽어 현재 경로와 맞붙는다. 조준을 빼고 저장하면 27점짜리 현재 경로가
+        # 13점짜리 이력과 비교돼 비슷함이 무너진다.
+        all_events,
         features,
         profile.version,
         quality,

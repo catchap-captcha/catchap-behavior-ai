@@ -16,7 +16,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # ~1500; 5000 blocks oversized/DoS payloads (red-team R10) with a wide margin.
 MAX_EVENTS_PER_ATTEMPT = 5000
 
-EventType = Literal["pointerdown", "pointermove", "pointerup", "pointercancel"]
+# `aimmove` 는 집기 **전** 포인터 이동이다. 나머지 넷과 달리 분류기에는 넣지 않는다
+# — 모델이 조준 없이 학습됐고 세션 특징 추출기는 이벤트 유형을 안 가려서, 그대로
+# 넣으면 학습 때 본 적 없는 분포가 되어 판정이 흔들린다(`scoring_unit="session"`).
+# 재생 탐지기만 이걸 쓴다. 경로가 13점에서 27점으로 늘어 변형 재생 검출이 9.3% ->
+# 95.7% 가 된다(2026-08-12, 실사용 궤적 1,323개). 가르는 곳은 `api/predict.py` 다.
+EventType = Literal["pointerdown", "pointermove", "pointerup", "pointercancel", "aimmove"]
 Label = Literal["human", "bot", "unknown"]
 LabelSource = Literal[
     "controlled_collection",

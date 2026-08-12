@@ -55,6 +55,27 @@ SPLIT = ROOT / "data" / "metadata" / "collection_split_20260806.json"
 
 
 
+HUMAN_FEATURES = ROOT / "data" / "interim" / "human_features_collection_20260806.jsonl"
+
+
+def session_vectors(people: set[str], names: tuple[str, ...]) -> np.ndarray:
+    """채점이 실제로 받는 모양 — 시도(세션) 하나당 특징 벡터 하나.
+
+    운영은 드래그가 아니라 시도 단위로 들어온다. 문턱을 여기서 읽어야 단위가 맞는다.
+    """
+    rows = []
+    with HUMAN_FEATURES.open() as f:
+        for line in f:
+            record = json.loads(line)
+            if record.get("label") != "human":
+                continue
+            code = (record.get("anonymous_participant_id") or "").split("-")[0]
+            if code not in people:
+                continue
+            rows.append([float(record.get(n) or 0.0) for n in names])
+    return np.nan_to_num(np.asarray(rows, dtype=float))
+
+
 def collection_drags(people: set[str]) -> list[list[dict]]:
     out = []
     with COLLECTION.open() as f:
@@ -69,11 +90,22 @@ def collection_drags(people: set[str]) -> list[list[dict]]:
             if not rows:
                 continue
             base = rows[0].get("client_timestamp_ms") or 0
+            # 정규화 좌표를 반드시 함께 넘긴다. `feature_extractor_v2._arrays` 는
+            # `x_normalized`/`y_normalized` 가 있으면 그걸 쓰고, **한 이벤트라도 없으면**
+            # 픽셀을 드래그 단위 min-max 로 다시 늘리는 다른 가지를 탄다. 픽셀만 넘기면
+            # 밀도는 "드래그마다 0~1로 늘린" 좌표계에서 학습되는데 운영 채점은 진짜
+            # 정규화 좌표로 들어온다 — 사람 영역이 어긋나 멀쩡한 사용자가 거부권에
+            # 걸린다(2026-08-12 실사용 오탐 18.9% 중 12.8%p 가 거부권이었다).
             events = [{
                 "seq": r.get("seq"), "event_type": r.get("event_type"),
                 "t_ms": float((r.get("client_timestamp_ms") or base) - base),
                 "x": float(r["x_pixel"]), "y": float(r["y_pixel"]),
-            } for r in rows if r.get("x_pixel") is not None]
+                "x_normalized": float(r["x_normalized"]),
+                "y_normalized": float(r["y_normalized"]),
+            } for r in rows
+                if r.get("x_pixel") is not None
+                and r.get("x_normalized") is not None
+                and r.get("y_normalized") is not None]
             out.extend(d for d in split_drags(events)
                        if move_count(d) >= MIN_MOVES_PER_DRAG)
     return out
@@ -128,9 +160,20 @@ def main() -> int:
         [[extract_features(d, None).get(n) or 0.0 for n in names] for d in drags],
         dtype=float))
     density = DensityVeto(X, names)
-    floor = float(np.percentile(density.score(X), args.tail_percent))
-    print(f"드래그 {len(X)}개 · 거부권 문턱 {floor:.6f} "
-          f"(학습 사람 밀도 하위 {args.tail_percent}%)")
+
+    # 문턱은 채점과 **같은 단위**에서 잡는다.
+    #
+    # 밀도 자체는 드래그 단위로 맞춘다 — 표본이 많아 사람 영역이 촘촘해진다. 그런데
+    # 운영에서 들어오는 것은 시도(세션) 하나의 특징 벡터다. 두 분포는 값의 범위가
+    # 달라서, 드래그 분포의 하위 2% 를 세션에 그대로 적용하면 멀쩡한 사람이 대량으로
+    # 걸린다. 실제로 그렇게 나갔고 오탐이 0.0% → 16.7% 가 됐다(2026-08-11 실측).
+    # 그래서 percentile 은 세션 특징에서 읽는다.
+    sess = session_vectors(train_people, names)
+    if sess.size == 0:
+        raise SystemExit("문턱을 잡을 세션 특징이 없다 — human_features 파일을 확인하라")
+    floor = float(np.percentile(density.score(sess), args.tail_percent))
+    print(f"밀도 학습 드래그 {len(X)}개 · 문턱 산출 세션 {len(sess)}개")
+    print(f"거부권 문턱 {floor:.6f} (학습 사람 **세션** 밀도 하위 {args.tail_percent}%)")
 
     out = dict(bundle)
     out["model_version"] = args.version
