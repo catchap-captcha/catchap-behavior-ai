@@ -99,7 +99,29 @@ def fuse_behavior_risk(
         risk_score = max(risk_score, policy.exact_replay_floor)
     if replay.path_similarity_score >= policy.dtw_similarity_threshold:
         reasons.append("dtw_similar_trace")
-        risk_score += policy.dtw_weight
+        # Redrawing a path the session already drew must reach step_up on its
+        # own. The additive weight alone (35) sits below medium (40), so a bot
+        # the model reads as human replayed the same shape indefinitely and got
+        # `allow` every time, with the detection logged and discarded. Measured
+        # 2026-08-13 against production: six consecutive wrong answers, replay
+        # flagged on every one, risk 35.0x, all allowed. This is the same gap
+        # already closed for `session_rate_exceeded` below.
+        #
+        # FRR cost of the floor, measured on 20,019 real human retry pairs:
+        # similarity crosses the threshold for 9.0% of them, and every crossing
+        # is the *same challenge* redrawn — across different challenges it never
+        # fired (0 of 19,131). Same-challenge retries are 2.9% of production
+        # challenges, so the expected cost is ~0.26% of attempts.
+        #
+        # What that cost actually is: `step_up` rejects the attempt even when
+        # the answer was right, so the person solves one more CAPTCHA. It is not
+        # a lockout and it does not touch the account, but it is a redo, not
+        # merely a slower puzzle — do not describe it as one.
+        #
+        # ⚠️That 2.9% comes from a small, mostly-internal traffic sample. Real
+        # users fail more often, so re-measure the retry rate before treating
+        # this number as settled — it is the whole basis for the floor.
+        risk_score = max(risk_score + policy.dtw_weight, policy.medium_risk_threshold)
     if replay.attempts_per_minute >= policy.max_attempts_per_minute:
         reasons.append("session_rate_exceeded")
         # An inhuman attempt rate must reach at least step_up on its own. The

@@ -137,3 +137,47 @@ def test_inhuman_session_rate_alone_forces_step_up():
 
     assert decision.recommended_action == "step_up"
     assert "session_rate_exceeded" in decision.reasons
+
+
+def test_replay_similarity_alone_reaches_step_up():
+    """★A repeated path must cost something on its own.
+
+    Before the floor the additive weight (35) sat below medium (40), so a bot
+    the model reads as human replayed the same shape and got `allow` every
+    time. Measured 2026-08-13 in production: six consecutive wrong answers,
+    `dtw_similar_trace` on every one, risk 35.0x, all allowed.
+    """
+    decision = fuse_behavior_risk(
+        0.999, _replay(path_similarity_score=0.98), _policy(),
+    )
+
+    assert decision.reasons == ("dtw_similar_trace",)
+    assert decision.risk_level == "medium"
+    assert decision.recommended_action == "step_up"
+
+
+def test_replay_similarity_stays_below_hard_enforcement():
+    """A repeat is worth a second check, not a block.
+
+    `step_up` already rejects the attempt even when the answer was right, so
+    the person solves one more CAPTCHA. At the measured ~0.26% of attempts
+    (same-challenge retries, 9.0% of which cross the threshold) that is
+    affordable; rate limiting on top of it would not be.
+    """
+    decision = fuse_behavior_risk(
+        0.999, _replay(path_similarity_score=0.98), _policy(),
+    )
+
+    assert decision.recommended_action != "step_up_and_rate_limit"
+
+
+def test_path_below_threshold_is_untouched():
+    """Ordinary drags must not move. Across different challenges the signal
+    never fired on real people (0 of 19,131 pairs)."""
+    decision = fuse_behavior_risk(
+        0.999, _replay(path_similarity_score=0.5), _policy(),
+    )
+
+    assert decision.risk_level == "low"
+    assert decision.recommended_action == "allow"
+    assert decision.reasons == ()
