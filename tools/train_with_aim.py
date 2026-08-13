@@ -43,6 +43,7 @@ sys.path.insert(0, str(ROOT))
 from app.services.feature_extractor_v23 import extract_features  # noqa: E402
 from app.services.trajectory_feature_views import get_feature_view  # noqa: E402
 from app.services.aim_segment import AIM_GAP_MS, trim_aim  # noqa: E402
+from tools.export_aim_from_production import is_sealed  # noqa: E402
 from training.evaluate_models import select_threshold_per_human_group  # noqa: E402
 
 HUMAN_EXPORT = ROOT / "data" / "interim" / "aim_production_20260812.jsonl"
@@ -55,6 +56,9 @@ GEOMETRY = Path("/private/tmp/claude-501/-Users-apple-Documents----"
                 "/5d3fc21e-53e5-49ae-9182-8aeaed0b6968/scratchpad/chal_geom.tsv")
 JOINED = ROOT / "data" / "interim" / "joined"
 VIEWS = ("general_without_physics", "dynamics_physics")
+# 봉인 참가자. **정확히 일치로 보면 안 된다** — 운영 값이 목적별로 갈라져 있다
+# (ms · ms-captcha · sw-mouse · sw-captcha · sw-mouse-v2 · sw-aim). 일치로만 걸면
+# 46건만 빠지고 537건이 학습에 남는다. `is_sealed` 가 접두어로 거른다.
 SEALED = {"ms", "sw"}
 # 승격 판단에 쓰는 계열. 나머지는 학습에만 쓴다(위 주석 참고).
 JUDGED = "D_replay"
@@ -76,7 +80,7 @@ def human_rows() -> list[dict]:
     for line in HUMAN_EXPORT.read_text().splitlines():
         row = json.loads(line)
         person = row.get("participant_id")
-        if not person or person in SEALED:
+        if not person or is_sealed(person, SEALED):
             continue
         slot = grouped.setdefault(row["challenge_id"],
                                   {"person": person, "events": []})
