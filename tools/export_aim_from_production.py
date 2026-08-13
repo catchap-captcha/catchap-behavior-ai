@@ -84,6 +84,30 @@ def fetch(sql: str, key: Path, password_file: Path) -> str:
     return result.stdout
 
 
+def is_sealed(person: str | None, sealed: set[str]) -> bool:
+    """봉인 참가자인가. **정확히 일치로 보면 안 된다.**
+
+    명단(`collection_split_20260806.json`)에는 사람 코드가 `sw`·`ms` 로 적혀 있는데,
+    운영에 실제로 들어온 값은 목적별로 갈라져 있다.
+
+        ms · ms-captcha · sw-mouse · sw-captcha · sw-mouse-v2 · sw-aim
+
+    정확히 일치로 거르면 `ms` 46건만 빠지고 나머지 537건이 학습 자료에 남는다.
+    2026-08-13 에 인프라 담당자가 잡았다 — 내 도구도 같은 구멍이었다. 다행히 내가 쓴
+    구간(08-12 04:29 이후)에는 봉인 기록이 0건이라 실제 오염은 없었다.
+
+    뒤가 글자·숫자로 이어지면 다른 사람일 수 있으므로 거르지 않는다(`swan`·`msg`).
+    """
+    if not person:
+        return False
+    for code in sealed:
+        if person == code:
+            return True
+        if person.startswith(code) and not person[len(code):len(code) + 1].isalnum():
+            return True
+    return False
+
+
 def split_runs(events: list[dict]) -> list[dict]:
     """한 챌린지의 순서열을 (조준, 드래그) 쌍들로 가른다."""
     events = sorted(events, key=lambda e: (e.get("seq") if e.get("seq") is not None else 0))
@@ -146,7 +170,7 @@ def main() -> int:
     with args.out.open("w") as out:
         for cid, slot in by_challenge.items():
             person = slot["participant_id"]
-            if person in sealed:
+            if is_sealed(person, sealed):
                 skipped_sealed += 1
                 continue
             if not person:
