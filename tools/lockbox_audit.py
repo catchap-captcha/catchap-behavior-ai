@@ -143,6 +143,32 @@ def main() -> int:
                             problems.append(
                                 f"{rel} — 봉인 해시 불일치. 데이터가 바뀌었거나 다시 만들어짐\n"
                                 f"      기록 {entry.get('sha256')}\n      실제 {actual}")
+        elif verify_hashes:
+            # ★봉인 데이터 대부분은 **별도 봉인 매니페스트가 없다.** 만들 때 자기
+            #   매니페스트의 `output.sha256` 에 해시를 적어 두는 형식이다. 위쪽
+            #   `lockbox_manifest` 형식은 소진된 세 벌뿐이다.
+            #
+            #   여기를 안 보던 탓에 봉인 9벌이 전부 "해시미확인" 으로 나왔다.
+            #   이 도구가 스스로 내건 세 번째 질문 — "디스크의 데이터가 봉인 당시
+            #   그대로인가" — 에 **사실상 답하지 못하고 있었다**(2026-08-18 발견).
+            #   승격 심사에서 "후보가 본 적 없다" 를 뒷받침하는 것이 이 해시다.
+            out = doc.get("output") or {}
+            recorded = out.get("sha256")
+            if out.get("rows") is not None:
+                rows = out.get("rows")
+            if not recorded:
+                problems.append(
+                    f"{rel} — 봉인 해시가 어디에도 없다. 이 데이터로 채점해도 "
+                    f"'후보가 본 적 없다'를 증명할 수 없다")
+            elif not data_file.exists():
+                problems.append(f"{rel} — 데이터 파일 없음: {data_file}")
+            else:
+                actual = sha256(data_file)
+                hash_checked = actual == recorded
+                if not hash_checked:
+                    problems.append(
+                        f"{rel} — 봉인 해시 불일치. 데이터가 바뀌었거나 다시 만들어짐\n"
+                        f"      기록 {recorded}\n      실제 {actual}")
 
         if isinstance(consumed, dict) and consumed.get("model_path"):
             model = Path(consumed["model_path"]).parent.name
